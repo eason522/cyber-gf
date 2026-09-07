@@ -66,16 +66,23 @@ async def recall(query: str) -> list[str]:
         def _find(uri):
             return client.find(query=query, target_uri=uri, limit=RECALL_TOP_K)
 
-        res = await asyncio.wait_for(
-            asyncio.to_thread(_find, f"viking://~/peers/{OV_PEER_ID}/memories/"), timeout=15
-        )
+        try:
+            res = await asyncio.wait_for(
+                asyncio.to_thread(_find, f"viking://~/peers/{OV_PEER_ID}/memories/"), timeout=8
+            )
+        except asyncio.TimeoutError:
+            log.warning("ov recall peer find timeout, skip")
+            return []  # 服务端忙（多半在提炼记忆），本轮不带记忆也别卡住回复
         items = res.get("memories", []) if isinstance(res, dict) else []
         if len(items) < 2:
-            res2 = await asyncio.wait_for(
-                asyncio.to_thread(_find, "viking://~/memories/"), timeout=15
-            )
-            if isinstance(res2, dict):
-                items += res2.get("memories", [])
+            try:
+                res2 = await asyncio.wait_for(
+                    asyncio.to_thread(_find, "viking://~/memories/"), timeout=8
+                )
+                if isinstance(res2, dict):
+                    items += res2.get("memories", [])
+            except asyncio.TimeoutError:
+                pass
         items.sort(key=lambda m: m.get("score", 0), reverse=True)
         out = [m["abstract"] for m in items[:RECALL_TOP_K] if m.get("abstract")]
         if out:

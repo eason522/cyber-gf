@@ -112,7 +112,7 @@ REPLY_TOOL = [{
                     "enum": ["撒娇", "温柔", "开心", "难过", "生气", "害羞", "平静"],
                     "description": "这句话的主导情绪，先输出它",
                 },
-                "text": {"type": "string", "description": "1~3 句口语台词"},
+                "text": {"type": "string", "description": "口语台词：日常闲聊 1~3 句；走心时刻可以 3~5 句，深情一点"},
             },
             "required": ["emotion", "text"],
         },
@@ -128,6 +128,35 @@ EMOTIONS = {
     "害羞": {"context": "用害羞、轻声细语的语气说话", "speech_rate": -5, "pitch": 1},
     "平静": {"context": "", "speech_rate": 0, "pitch": 0},
 }
+
+# 深度路由：明显日常的短消息走快速通道，拿不准的问裁判模型
+DEEP_KEYWORDS = ("爱", "想你", "思念", "难过", "伤心", "哭", "emo", "分手", "纪念日",
+                 "永远", "害怕", "孤独", "委屈", "感动", "心跳", "未来", "嫁给", "梦见")
+JUDGE_PROMPT = (
+    "你是回复规划器。判断这句话该用哪种回复深度："
+    "CHAT = 日常闲聊，随性短回复即可；"
+    "DEEP = 深情/走心/触景生情的时刻（表白、思念、倾诉心事、深夜emo、纪念日、人生话题），"
+    "值得认真写一段较长较深情的回复。只输出 CHAT 或 DEEP 一个词。\n\n他说：%s"
+)
+
+
+async def judge_depth(user_text: str) -> str:
+    """返回 reasoning_effort 档位：minimal（闲聊，关闭思考）或 high（深情长回复）。"""
+    t = user_text.strip()
+    if len(t) <= 10 and not any(k in t for k in DEEP_KEYWORDS):
+        return "minimal"
+    try:
+        r = await llm.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": JUDGE_PROMPT % t}],
+            max_completion_tokens=600,  # 关闭思考后实际只输出一个词
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+        ans = (r.choices[0].message.content or "").upper()
+        return "high" if "DEEP" in ans else "minimal"
+    except Exception:
+        log.exception("judge failed, default minimal")
+        return "minimal"
 
 
 TEXT_KEY = re.compile(r'"text"\s*:\s*"')
@@ -150,10 +179,19 @@ def _extract_stream_text(raw: str) -> str:
     return _json_unescape(s)
 
 
-async def chat_stream(user_id: int, user_text: str):
-    """流式回复生成器：依次产出 ("emotion", e) / ("sentence", s)，最后 ("done", reply, emotion)。"""
+async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | None = None):
+    """流式回复生成器：依次产出 ("emotion", e) / ("sentence", s)，最后 ("done", reply, emotion)。
+
+    recall_task：语音场景下与 ASR 并行的预检索任务。
+    """
     store = get_store(user_id)
-    recalled = await ov_memory.recall(user_text)
+    judge_task = asyncio.create_task(judge_depth(user_text))
+    is_pre_recall = recall_task is not None
+    if recall_task is None:
+        recall_task = asyncio.create_task(ov_memory.recall(user_text))
+    effort, recalled = await asyncio.gather(judge_task, recall_task)
+    if not recalled and is_pre_recall:
+        recalled = await ov_memory.recall(user_text)  # 预检索为空，用真实文本补一次
     if recalled:
         mem_block = "\n".join(f"- {m}" for m in recalled)
     elif store["memories"]:  # OpenViking 不可用时回退到本地记忆
@@ -161,6 +199,9 @@ async def chat_stream(user_id: int, user_text: str):
     else:
         mem_block = ""
     system = soul.build_system(mem_block)
+    if effort == "high":
+        system += "\n\n（此刻是走心时刻：他这句话触动了你。这次不用拘泥一兩句，可以写 3~5 句，深情一點、慢慢說。）"
+    log.info("depth=%s", effort)
     msgs = [{"role": "system", "content": system}]
     msgs.extend(store["history"][-HISTORY_TURNS * 2 :])
     msgs.append({"role": "user", "content": user_text})
@@ -170,6 +211,11 @@ async def chat_stream(user_id: int, user_text: str):
         tools=REPLY_TOOL,
         tool_choice={"type": "function", "function": {"name": "reply"}},
         stream=True,
+        extra_body=(
+            {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
+            if effort == "high"
+            else {"thinking": {"type": "disabled"}}
+        ),
     )
     raw = ""  # 工具调用参数（累积的 JSON 字符串）
     plain = ""  # 模型没走工具调用时的兜底
@@ -283,7 +329,8 @@ async def _keepalive_action(bot, chat_id: int, action, stop: asyncio.Event) -> N
             pass
 
 
-async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_text: str):
+async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_text: str,
+                          recall_task: asyncio.Task | None = None):
     """语音优先：LLM 流式生成，句子一完整就并行合成，语音条按序先发，完整文字最后发。"""
     chat_id = update.effective_chat.id
     stop = asyncio.Event()
@@ -293,7 +340,7 @@ async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_t
     full_reply = ""
     t0 = time.time()
     try:
-        async for ev in chat_stream(update.effective_user.id, user_text):
+        async for ev in chat_stream(update.effective_user.id, user_text, recall_task=recall_task):
             if ev[0] == "emotion":
                 emotion = ev[1]
             elif ev[0] == "sentence":
@@ -331,9 +378,15 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         tg_file = await update.message.voice.get_file()
         await tg_file.download_to_drive(str(ogg_in))
+        # ASR 与记忆预检索并行：whisper 识别的同时，用最近对话上下文先做语义检索
+        store = get_store(update.effective_user.id)
+        ctx_query = " ".join(m["content"] for m in store["history"][-2:] if m.get("content"))
+        pre_recall = asyncio.create_task(ov_memory.recall(ctx_query)) if ctx_query else None
         user_text = await asyncio.to_thread(transcribe, str(ogg_in))
         log.info("asr: %s", user_text)
         if not user_text:
+            if pre_recall:
+                pre_recall.cancel()
             await update.message.reply_text("欸？人家沒聽清楚啦，你再說一次嘛～")
             return
     except Exception:
@@ -342,7 +395,7 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     finally:
         ogg_in.unlink(missing_ok=True)
-    await process_message(update, ctx, user_text)
+    await process_message(update, ctx, user_text, recall_task=pre_recall)
 
 
 def _touch_contact(update: Update) -> None:
@@ -410,6 +463,13 @@ async def heartbeat_loop(app: Application) -> None:
 
 
 async def _post_init(app: Application) -> None:
+    # 过滤 httpcore2 在 Python 3.14 下关闭流式响应时的已知噪音
+    def _exc_filter(loop, context):
+        if "generator didn't stop after athrow" in str(context.get("exception", "")):
+            return
+        loop.default_exception_handler(context)
+
+    asyncio.get_running_loop().set_exception_handler(_exc_filter)
     asyncio.create_task(heartbeat_loop(app))
 
 
