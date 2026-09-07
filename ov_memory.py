@@ -1,6 +1,8 @@
-"""OpenViking 长期记忆封装：检索（find）+ 会话提交（session commit）。
+"""OpenViking 长期记忆封装：语义检索（find）+ 会话提交（session commit）。
 
 所有函数在 OpenViking 不可用时优雅降级（返回空/跳过），绝不阻塞主链路。
+事实类记忆带 peer_id 写入 viking://~/peers/boyfriend/memories/，
+检索时同时搜 self 与 peer 两个空间。
 """
 
 import asyncio
@@ -13,6 +15,7 @@ log = logging.getLogger("cyber-gf.ov")
 
 OV_URL = os.getenv("OV_URL", "http://127.0.0.1:1933")
 OV_API_KEY = os.getenv("OV_API_KEY", "")
+OV_PEER_ID = os.getenv("OV_PEER_ID", "boyfriend")
 COMMIT_EVERY = int(os.getenv("MEMORY_EVERY", "4"))
 RECALL_TOP_K = int(os.getenv("OV_RECALL_TOP_K", "5"))
 
@@ -25,26 +28,27 @@ _lock = asyncio.Lock()
 def _get_client():
     global _client
     if _client is None:
-        from openviking_sdk import AsyncHTTPClient
+        from openviking_sdk import SyncHTTPClient
 
-        _client = AsyncHTTPClient(url=OV_URL, api_key=OV_API_KEY)
+        _client = SyncHTTPClient(url=OV_URL, api_key=OV_API_KEY)
+        _client.initialize()
     return _client
 
 
 async def healthy() -> bool:
-    """60 秒缓存的健康检查：一次真实 find 调用。"""
+    """60 秒缓存的健康检查。"""
     global _health
     ok, ts = _health
     if time.time() - ts < 60:
         return ok
     if not OV_API_KEY:
-        _health = (False, time.time())
         return False
+
+    def _ping():
+        _get_client().find(query="ping", target_uri="viking://~/memories/", limit=1)
+
     try:
-        client = _get_client()
-        if hasattr(client, "initialize"):
-            await client.initialize()
-        await asyncio.wait_for(client.find(query="ping", target_uri="viking://~/memories/"), timeout=10)
+        await asyncio.wait_for(asyncio.to_thread(_ping), timeout=10)
         _health = (True, time.time())
     except Exception:
         log.exception("openviking unhealthy")
@@ -53,17 +57,28 @@ async def healthy() -> bool:
 
 
 async def recall(query: str) -> list[str]:
-    """语义检索长期记忆，返回 abstract 列表。失败返回 []。"""
+    """语义检索长期记忆（self + peer 两个空间），按分数取前 RECALL_TOP_K。"""
     if not await healthy():
         return []
     try:
         client = _get_client()
-        res = await asyncio.wait_for(
-            client.find(query=query, target_uri="viking://~/memories/", limit=RECALL_TOP_K),
+
+        def _find(uri):
+            return client.find(query=query, target_uri=uri, limit=RECALL_TOP_K)
+
+        self_res, peer_res = await asyncio.wait_for(
+            asyncio.gather(
+                asyncio.to_thread(_find, "viking://~/memories/"),
+                asyncio.to_thread(_find, f"viking://~/peers/{OV_PEER_ID}/memories/"),
+            ),
             timeout=15,
         )
-        items = res.get("memories", []) if isinstance(res, dict) else []
-        out = [m.get("abstract", "") for m in items if m.get("abstract")]
+        items = []
+        for res in (self_res, peer_res):
+            if isinstance(res, dict):
+                items += res.get("memories", [])
+        items.sort(key=lambda m: m.get("score", 0), reverse=True)
+        out = [m["abstract"] for m in items[:RECALL_TOP_K] if m.get("abstract")]
         if out:
             log.info("ov recall %d: %s", len(out), [a[:30] for a in out])
         return out
@@ -88,14 +103,18 @@ async def record_turn(user_id: int, user_text: str, reply: str) -> None:
     if not await healthy():
         _pending[user_id] = batch + _pending[user_id]  # 放回去下次再试
         return
-    try:
+
+    def _commit():
         client = _get_client()
-        info = await client.create_session(session_id=f"tg_{user_id}_{int(time.time())}")
+        info = client.create_session()
         session = client.session(session_id=info["session_id"])
         for msg in batch:
-            await session.add_message(role=msg["role"], content=msg["content"])
-        result = await session.commit()
-        log.info("ov committed %d msgs, task=%s", len(batch), result)
+            session.add_message(role=msg["role"], content=msg["content"], peer_id=OV_PEER_ID)
+        return session.commit()
+
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_commit), timeout=60)
+        log.info("ov committed %d msgs, task=%s", len(batch), result.get("task_id"))
     except Exception:
         log.exception("ov commit failed")
         _pending[user_id] = batch + _pending[user_id]
