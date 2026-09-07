@@ -1,0 +1,8 @@
+.venv/
+data/
+*.log
+__pycache__/
+ffmpeg
+config.env
+*.mp3
+get-pip.py
