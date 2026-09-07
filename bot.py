@@ -141,19 +141,28 @@ JUDGE_PROMPT = (
 
 
 async def judge_depth(user_text: str) -> str:
-    """返回 reasoning_effort 档位：minimal（闲聊，关闭思考）或 high（深情长回复）。"""
+    """返回思考档位：minimal（闲聊，关闭思考）或 high（深情长回复）。
+
+    裁判用硅基流动的 Qwen3-8B（关思考，~1s）；seed-character 做元分类任务不可靠，实测全判 CHAT。
+    """
     t = user_text.strip()
     if len(t) <= 10 and not any(k in t for k in DEEP_KEYWORDS):
         return "minimal"
+    key = os.getenv("JUDGE_API_KEY")
+    if not key:
+        return "minimal"
     try:
-        r = await llm.chat.completions.create(
-            model=LLM_MODEL,
+        sf = AsyncOpenAI(base_url="https://api.siliconflow.cn/v1", api_key=key)
+        r = await sf.chat.completions.create(
+            model=os.getenv("JUDGE_MODEL", "Qwen/Qwen3-8B"),
             messages=[{"role": "user", "content": JUDGE_PROMPT % t}],
-            max_completion_tokens=600,  # 关闭思考后实际只输出一个词
-            extra_body={"thinking": {"type": "disabled"}},
+            max_tokens=20,
+            extra_body={"enable_thinking": False},
         )
         ans = (r.choices[0].message.content or "").upper()
-        return "high" if "DEEP" in ans else "minimal"
+        result = "high" if "DEEP" in ans else "minimal"
+        log.info("judge: %s -> %s", t[:20], result)
+        return result
     except Exception:
         log.exception("judge failed, default minimal")
         return "minimal"
