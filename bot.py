@@ -112,7 +112,7 @@ REPLY_TOOL = [{
                     "enum": ["撒娇", "温柔", "开心", "难过", "生气", "害羞", "平静"],
                     "description": "这句话的主导情绪，先输出它",
                 },
-                "text": {"type": "string", "description": "口语台词：日常闲聊 1~3 句；走心时刻可以 3~5 句，深情一点"},
+                "text": {"type": "string", "description": "口语台词：日常闲聊 1~3 句；系统提示走心时刻时，写 5~8 句的深情段落（至少100字），把心意说完整"},
             },
             "required": ["emotion", "text"],
         },
@@ -209,7 +209,12 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
         mem_block = ""
     system = soul.build_system(mem_block)
     if effort == "high":
-        system += "\n\n（此刻是走心时刻：他这句话触动了你。这次不用拘泥一兩句，可以写 3~5 句，深情一點、慢慢說。）"
+        system += (
+            "\n\n（走心時刻：他這句話觸動了你心底最軟的地方。現在拋開平常發短訊息的習慣，"
+            "像寫一封短信、一段獨白那樣，把你的心意完整說出來——認真地說 5~8 句、至少 100 字，"
+            "回憶你們之間的細節，說你平時不好意思說的話。慢慢說，他會聽完的。"
+            "感覺大概是這樣的節奏（只是示範語氣和長度，絕對不要照抄內容，說你自己心裡的話）：「寶貝，你知道嗎……其實我有好多話一直想跟你說……（以下省略）」）"
+        )
     log.info("depth=%s", effort)
     msgs = [{"role": "system", "content": system}]
     msgs.extend(store["history"][-HISTORY_TURNS * 2 :])
