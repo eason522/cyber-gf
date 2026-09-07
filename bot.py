@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import edge_tts
@@ -18,7 +19,9 @@ from telegram.ext import (
     filters,
 )
 
-from persona import PERSONA
+import soul
+import memory as mem
+import ov_memory
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("cyber-gf")
@@ -34,12 +37,28 @@ TTS_VOICE = os.getenv("TTS_VOICE", "zh-TW-HsiaoChenNeural")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 HISTORY_TURNS = int(os.getenv("HISTORY_TURNS", "20"))
 
-import memory as mem
-
 llm = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
 stores: dict[int, dict] = {}
 MEMORY_EVERY = int(os.getenv("MEMORY_EVERY", "4"))
 _extracting: set[int] = set()
+
+# 心跳：主动关心
+HEARTBEAT_MINUTES = int(os.getenv("HEARTBEAT_MINUTES", "45"))
+HEARTBEAT_SILENCE_H = float(os.getenv("HEARTBEAT_SILENCE_H", "2"))
+ACTIVE_HOURS = (8, 23)  # 深夜免打扰
+CONTACT_FILE = Path(__file__).parent / "data" / "contact.json"
+
+
+def _load_contact() -> dict:
+    try:
+        return json.loads(CONTACT_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_contact(user_id: int, chat_id: int) -> None:
+    CONTACT_FILE.parent.mkdir(exist_ok=True)
+    CONTACT_FILE.write_text(json.dumps({"user_id": user_id, "chat_id": chat_id, "ts": time.time()}))
 
 _whisper = None
 
@@ -112,9 +131,14 @@ EMOTIONS = {
 
 async def chat(user_id: int, user_text: str) -> tuple[str, str]:
     store = get_store(user_id)
-    system = PERSONA
-    if store["memories"]:
-        system += "\n\n你記得關於他的事情：\n" + "\n".join(f"- {m}" for m in store["memories"])
+    recalled = await ov_memory.recall(user_text)
+    if recalled:
+        mem_block = "\n".join(f"- {m}" for m in recalled)
+    elif store["memories"]:  # OpenViking 不可用时回退到本地记忆
+        mem_block = "\n".join(f"- {m}" for m in store["memories"])
+    else:
+        mem_block = ""
+    system = soul.build_system(mem_block)
     msgs = [{"role": "system", "content": system}]
     msgs.extend(store["history"][-HISTORY_TURNS * 2 :])
     msgs.append({"role": "user", "content": user_text})
@@ -140,7 +164,9 @@ async def chat(user_id: int, user_text: str) -> tuple[str, str]:
     store["history"].append({"role": "assistant", "content": reply})
     store["history"] = store["history"][-HISTORY_TURNS * 4 :]
     mem.save(user_id, store)
-    asyncio.create_task(maybe_extract(user_id))
+    asyncio.create_task(ov_memory.record_turn(user_id, user_text, reply))
+    if not await ov_memory.healthy():  # OV 不在线时用本地提炼兜底
+        asyncio.create_task(maybe_extract(user_id))
     return reply, emotion
 
 
@@ -214,6 +240,7 @@ async def reply_with_text_and_voice(update: Update, ctx: ContextTypes.DEFAULT_TY
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
+    _touch_contact(update)
     await ctx.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
     try:
         reply, emotion = await chat(update.effective_user.id, user_text)
@@ -225,6 +252,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    _touch_contact(update)
     await ctx.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
     ogg_in = Path(tempfile.mktemp(suffix=".ogg"))
     try:
@@ -245,8 +273,76 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await reply_with_text_and_voice(update, ctx, reply, emotion)
 
 
+def _touch_contact(update: Update) -> None:
+    _save_contact(update.effective_user.id, update.effective_chat.id)
+
+
+async def heartbeat_loop(app: Application) -> None:
+    """静默契约：没事就 NO_REPLY，绝不打扰。"""
+    await asyncio.sleep(120)  # 启动后先等两分钟
+    while True:
+        try:
+            contact = _load_contact()
+            if not contact:
+                continue
+            hour = time.localtime().tm_hour
+            if not (ACTIVE_HOURS[0] <= hour < ACTIVE_HOURS[1]):
+                continue
+            silence_h = (time.time() - contact.get("ts", 0)) / 3600
+            if silence_h < HEARTBEAT_SILENCE_H:
+                continue
+            uid = contact["user_id"]
+            store = get_store(uid)
+            recalled = await ov_memory.recall("最近关心他、问候他、约定、他的近况")
+            mem_block = "\n".join(f"- {m}" for m in recalled or store["memories"])
+            system = soul.build_system(mem_block)
+            now = time.strftime("%H:%M")
+            msgs = [
+                {"role": "system", "content": system},
+                *store["history"][-HISTORY_TURNS * 2 :],
+                {"role": "user", "content": (
+                    f"（系统提示：现在是{now}，他已经{silence_h:.1f}小时没和你说话了。"
+                    "如果你想主动关心他，就调用 reply 工具发一条消息；"
+                    "如果没有特别想说的（比如刚聊过不久、没有理由打扰），就只回复 NO_REPLY，什么也别发。）"
+                )},
+            ]
+            resp = await llm.chat.completions.create(
+                model=LLM_MODEL, messages=msgs, tools=REPLY_TOOL, tool_choice="auto",
+            )
+            m = resp.choices[0].message
+            if not m.tool_calls:
+                continue  # NO_REPLY
+            args = json.loads(m.tool_calls[0].function.arguments)
+            text = (args.get("text") or "").strip()
+            emotion = args.get("emotion") or "温柔"
+            if not text:
+                continue
+            log.info("heartbeat: reaching out (%s): %s", emotion, text[:50])
+            store["history"].append({"role": "assistant", "content": text})
+            mem.save(uid, store)
+            chat_id = contact["chat_id"]
+            await app.bot.send_message(chat_id, text)
+            tts_params = EMOTIONS.get(emotion, EMOTIONS["平静"])
+            try:
+                ogg = await tts_to_ogg(text, tts_params)
+                await app.bot.send_voice(chat_id, voice=ogg.read_bytes())
+                ogg.unlink(missing_ok=True)
+            except Exception:
+                log.exception("heartbeat tts failed")
+            contact["ts"] = time.time()
+            _save_contact(uid, chat_id)
+        except Exception:
+            log.exception("heartbeat error")
+        finally:
+            await asyncio.sleep(HEARTBEAT_MINUTES * 60)
+
+
+async def _post_init(app: Application) -> None:
+    asyncio.create_task(heartbeat_loop(app))
+
+
 def main():
-    app = Application.builder().token(TG_TOKEN).build()
+    app = Application.builder().token(TG_TOKEN).post_init(_post_init).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(MessageHandler(filters.VOICE, on_voice))
     log.info("bot started")
