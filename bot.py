@@ -107,13 +107,14 @@ REPLY_TOOL = [{
         "parameters": {
             "type": "object",
             "properties": {
-                "text": {"type": "string"},
                 "emotion": {
                     "type": "string",
                     "enum": ["撒娇", "温柔", "开心", "难过", "生气", "害羞", "平静"],
+                    "description": "这句话的主导情绪，先输出它",
                 },
+                "text": {"type": "string", "description": "1~3 句口语台词"},
             },
-            "required": ["text", "emotion"],
+            "required": ["emotion", "text"],
         },
     },
 }]
@@ -129,7 +130,28 @@ EMOTIONS = {
 }
 
 
-async def chat(user_id: int, user_text: str) -> tuple[str, str]:
+TEXT_KEY = re.compile(r'"text"\s*:\s*"')
+EMOTION_RE = re.compile(r'"emotion"\s*:\s*"([^"]+)"')
+
+
+def _json_unescape(s: str) -> str:
+    if s.endswith("\\"):
+        s = s[:-1]
+    return s.replace("\\\\", "\x00").replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t").replace("\x00", "\\")
+
+
+def _extract_stream_text(raw: str) -> str:
+    """从流式累积的工具调用参数 JSON 中取出 text 字段的当前内容。"""
+    m = TEXT_KEY.search(raw)
+    if not m:
+        return ""
+    s = raw[m.end():]
+    s = re.sub(r'(?<!\\)"\s*\}?\s*$', "", s)  # 去掉收尾引号
+    return _json_unescape(s)
+
+
+async def chat_stream(user_id: int, user_text: str):
+    """流式回复生成器：依次产出 ("emotion", e) / ("sentence", s)，最后 ("done", reply, emotion)。"""
     store = get_store(user_id)
     recalled = await ov_memory.recall(user_text)
     if recalled:
@@ -142,24 +164,62 @@ async def chat(user_id: int, user_text: str) -> tuple[str, str]:
     msgs = [{"role": "system", "content": system}]
     msgs.extend(store["history"][-HISTORY_TURNS * 2 :])
     msgs.append({"role": "user", "content": user_text})
-    resp = await llm.chat.completions.create(
+    stream = await llm.chat.completions.create(
         model=LLM_MODEL,
         messages=msgs,
         tools=REPLY_TOOL,
         tool_choice={"type": "function", "function": {"name": "reply"}},
+        stream=True,
     )
-    m = resp.choices[0].message
-    emotion = "平静"
-    if m.tool_calls:
-        args = json.loads(m.tool_calls[0].function.arguments)
+    raw = ""  # 工具调用参数（累积的 JSON 字符串）
+    plain = ""  # 模型没走工具调用时的兜底
+    emitted = 0  # 已产出的句段数
+    emotion_seen: str | None = None
+    try:
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            tc = getattr(delta, "tool_calls", None)
+            if tc:
+                raw += tc[0].function.arguments or ""
+            elif delta.content:
+                plain += delta.content
+            if raw and emotion_seen is None:
+                em = EMOTION_RE.search(raw)
+                if em:
+                    emotion_seen = em.group(1)
+                    yield ("emotion", emotion_seen)
+            decoded = _extract_stream_text(raw) if raw else plain
+            parts = SENT_SPLIT.split(decoded)
+            complete = [p.strip() for p in parts[:-1] if p.strip()]
+            while emitted < len(complete):
+                yield ("sentence", complete[emitted])
+                emitted += 1
+    finally:
+        try:
+            await stream.close()
+        except Exception:
+            pass
+
+    if raw:
+        args = json.loads(raw)
         reply = (args.get("text") or "").strip()
-        emotion = args.get("emotion") or emotion
+        emotion = args.get("emotion") or emotion_seen or "平静"
     else:
-        reply = (m.content or "").strip()
+        reply = plain.strip()
+        emotion = emotion_seen or "平静"
     if not reply:
         raise ValueError("empty reply")
     if emotion not in EMOTIONS:
         emotion = "平静"
+    # 冲刷剩余文本
+    decoded = _extract_stream_text(raw) if raw else plain
+    rest = [p.strip() for p in SENT_SPLIT.split(decoded) if p.strip()]
+    while emitted < len(rest):
+        yield ("sentence", rest[emitted])
+        emitted += 1
+
     store["history"].append({"role": "user", "content": user_text})
     store["history"].append({"role": "assistant", "content": reply})
     store["history"] = store["history"][-HISTORY_TURNS * 4 :]
@@ -167,7 +227,7 @@ async def chat(user_id: int, user_text: str) -> tuple[str, str]:
     asyncio.create_task(ov_memory.record_turn(user_id, user_text, reply))
     if not await ov_memory.healthy():  # OV 不在线时用本地提炼兜底
         asyncio.create_task(maybe_extract(user_id))
-    return reply, emotion
+    yield ("done", reply, emotion)
 
 
 async def _synth_mp3(text: str, mp3: Path, tts_params: dict | None = None) -> None:
@@ -203,52 +263,65 @@ def transcribe(path: str) -> str:
 SENT_SPLIT = re.compile(r"(?<=[。！？!?；;~…\n])")
 
 
-def split_sentences(text: str) -> list[str]:
-    parts = [p.strip() for p in SENT_SPLIT.split(text) if p.strip()]
-    merged: list[str] = []
-    for p in parts:
-        if merged and len(p) < 6:
-            merged[-1] += p
-        elif merged and len(merged[-1]) < 6:
-            merged[-1] += p
-        else:
-            merged.append(p)
-    return merged or [text]
+async def _safe_ogg(sentence: str, tts_params: dict) -> Path | None:
+    try:
+        return await tts_to_ogg(sentence, tts_params)
+    except Exception:
+        log.exception("tts failed")
+        return None
 
 
-async def reply_with_text_and_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE, reply: str, emotion: str):
-    await update.message.reply_text(reply)
-    chat_id = update.effective_chat.id
-    tts_params = EMOTIONS[emotion]
-    log.info("emotion=%s sentences=%d", emotion, len(split_sentences(reply)))
-
-    async def make_ogg(s: str) -> Path | None:
+async def _keepalive_action(bot, chat_id: int, action, stop: asyncio.Event) -> None:
+    while not stop.is_set():
         try:
-            return await tts_to_ogg(s, tts_params)
+            await bot.send_chat_action(chat_id, action)
         except Exception:
-            log.exception("tts failed")
-            return None
+            pass
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=4.5)
+        except asyncio.TimeoutError:
+            pass
 
-    oggs = await asyncio.gather(*(make_ogg(s) for s in split_sentences(reply)))
+
+async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_text: str):
+    """语音优先：LLM 流式生成，句子一完整就并行合成，语音条按序先发，完整文字最后发。"""
+    chat_id = update.effective_chat.id
+    stop = asyncio.Event()
+    keepalive = asyncio.create_task(_keepalive_action(ctx.bot, chat_id, ChatAction.RECORD_VOICE, stop))
+    emotion = "平静"
+    tasks: list[asyncio.Task] = []
+    full_reply = ""
+    t0 = time.time()
+    try:
+        async for ev in chat_stream(update.effective_user.id, user_text):
+            if ev[0] == "emotion":
+                emotion = ev[1]
+            elif ev[0] == "sentence":
+                tasks.append(asyncio.create_task(_safe_ogg(ev[1], EMOTIONS[emotion])))
+            else:
+                _, full_reply, emotion = ev
+    except Exception:
+        log.exception("llm failed")
+        stop.set()
+        await update.message.reply_text("嗚…人家剛剛恍神了啦，你再說一次好不好齁🥺")
+        return
+    log.info("llm stream done in %.1fs, %d sentences, emotion=%s", time.time() - t0, len(tasks), emotion)
+
+    oggs = await asyncio.gather(*tasks)
+    stop.set()
+    keepalive.cancel()
     for ogg in oggs:
         if not ogg:
             continue
         await ctx.bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
         await update.message.reply_voice(voice=ogg.read_bytes())
         ogg.unlink(missing_ok=True)
+    await update.message.reply_text(full_reply)  # 文字最后到
 
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
     _touch_contact(update)
-    await ctx.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
-    try:
-        reply, emotion = await chat(update.effective_user.id, user_text)
-    except Exception:
-        log.exception("llm failed")
-        await update.message.reply_text("嗚…人家剛剛恍神了啦，你再說一次好不好齁🥺")
-        return
-    await reply_with_text_and_voice(update, ctx, reply, emotion)
+    await process_message(update, ctx, update.message.text)
 
 
 async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -263,14 +336,13 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not user_text:
             await update.message.reply_text("欸？人家沒聽清楚啦，你再說一次嘛～")
             return
-        reply, emotion = await chat(update.effective_user.id, user_text)
     except Exception:
-        log.exception("voice pipeline failed")
+        log.exception("asr failed")
         await update.message.reply_text("嗚…人家剛剛恍神了啦，你再說一次好不好齁🥺")
         return
     finally:
         ogg_in.unlink(missing_ok=True)
-    await reply_with_text_and_voice(update, ctx, reply, emotion)
+    await process_message(update, ctx, user_text)
 
 
 def _touch_contact(update: Update) -> None:

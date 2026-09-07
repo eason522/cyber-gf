@@ -36,19 +36,19 @@ def _get_client():
 
 
 async def healthy() -> bool:
-    """60 秒缓存的健康检查。"""
+    """60 秒缓存的健康检查：廉价的 /health HTTP 请求。"""
     global _health
     ok, ts = _health
     if time.time() - ts < 60:
         return ok
     if not OV_API_KEY:
         return False
-
-    def _ping():
-        _get_client().find(query="ping", target_uri="viking://~/memories/", limit=1)
-
     try:
-        await asyncio.wait_for(asyncio.to_thread(_ping), timeout=10)
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5, trust_env=False) as c:
+            r = await c.get(f"{OV_URL}/health")
+            r.raise_for_status()
         _health = (True, time.time())
     except Exception:
         log.exception("openviking unhealthy")
@@ -57,7 +57,7 @@ async def healthy() -> bool:
 
 
 async def recall(query: str) -> list[str]:
-    """语义检索长期记忆（self + peer 两个空间），按分数取前 RECALL_TOP_K。"""
+    """语义检索长期记忆：先查 peer 空间，结果太少再补查 self。失败返回 []。"""
     if not await healthy():
         return []
     try:
@@ -66,17 +66,16 @@ async def recall(query: str) -> list[str]:
         def _find(uri):
             return client.find(query=query, target_uri=uri, limit=RECALL_TOP_K)
 
-        self_res, peer_res = await asyncio.wait_for(
-            asyncio.gather(
-                asyncio.to_thread(_find, "viking://~/memories/"),
-                asyncio.to_thread(_find, f"viking://~/peers/{OV_PEER_ID}/memories/"),
-            ),
-            timeout=15,
+        res = await asyncio.wait_for(
+            asyncio.to_thread(_find, f"viking://~/peers/{OV_PEER_ID}/memories/"), timeout=15
         )
-        items = []
-        for res in (self_res, peer_res):
-            if isinstance(res, dict):
-                items += res.get("memories", [])
+        items = res.get("memories", []) if isinstance(res, dict) else []
+        if len(items) < 2:
+            res2 = await asyncio.wait_for(
+                asyncio.to_thread(_find, "viking://~/memories/"), timeout=15
+            )
+            if isinstance(res2, dict):
+                items += res2.get("memories", [])
         items.sort(key=lambda m: m.get("score", 0), reverse=True)
         out = [m["abstract"] for m in items[:RECALL_TOP_K] if m.get("abstract")]
         if out:
