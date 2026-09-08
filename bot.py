@@ -144,23 +144,27 @@ EMOTIONS = {
 }
 
 # 悄悄话/耳语/气声类演绎：实测小和音色情绪表现力弱于 vv，故命中 voice 提示关键词时
-# 切 vv 音色 + 官网对照验证过的纯气声指令；其余都用默认音色小和（自带台湾腔）
+# 切 vv 音色 + 官网对照验证过的纯气声指令；且悄悄话必须整段一次合成（分句并行合成
+# 气声会逐句漂移，context_texts 混入 quote/前句/section_id 也会稀释指令，隔离实验实测），
+# 由 process_message 攒句到流式结束后单段合成。其余情绪都用默认音色小和（自带台湾腔）
 WHISPER_KEYWORDS = ("耳语", "悄悄话", "气声", "asmr")
 WHISPER_VOICE = "zh_female_vv_uranus_bigtts"
 WHISPER_INSTRUCTION = ("全程用纯气声耳语：声带完全不震动、没有一点真声和音调起伏，"
                        "只有气流摩擦的沙沙声，放慢语速、贴着耳朵轻轻地说")
 
 
-def tts_params_for(emotion: str, voice_hint: str = "", quote: str = "") -> dict:
-    """语音指令和引用上文都走 additions.context_texts（指令必须纯声音描写，见上）。
-    用户原话只能作为引用上文放 context，绝不拼进合成文本（会被念出来）。"""
+def is_whisper(voice_hint: str) -> bool:
+    return any(k in voice_hint.lower() for k in WHISPER_KEYWORDS)
+
+
+def tts_params_for(emotion: str, voice_hint: str = "") -> dict:
+    """语音指令走 additions.context_texts，且只放一条纯指令——混入引用上文/多条指令
+    叠加都会稀释效果（隔离实验实测）。用户原话绝不进 context（同样会干扰）。"""
     hint = voice_hint.strip()
-    if any(k in hint.lower() for k in WHISPER_KEYWORDS):
-        ctx = [WHISPER_INSTRUCTION] + ([quote] if quote else [])
-        return {"context": ctx, "voice": WHISPER_VOICE}
+    if is_whisper(hint):
+        return {"context": [WHISPER_INSTRUCTION], "voice": WHISPER_VOICE}
     instruction = "；".join(c for c in (EMOTIONS.get(emotion, ""), hint) if c)
-    ctx = ([instruction] if instruction else []) + ([quote] if quote else [])
-    return {"context": ctx}
+    return {"context": [instruction] if instruction else []}
 
 # 深度路由：明显日常的短消息走快速通道，拿不准的问裁判模型
 DEEP_KEYWORDS = ("爱", "想你", "思念", "难过", "伤心", "哭", "emo", "分手", "纪念日",
@@ -444,6 +448,7 @@ async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_t
     keepalive = asyncio.create_task(_keepalive_action(ctx.bot, chat_id, ChatAction.RECORD_VOICE, stop))
     emotion = "平静"
     voice_hint = ""
+    whisper_sents: list[str] = []  # 悄悄话场景攒整段，流式结束后一次合成（分句合成气声会漂）
     tasks: list[asyncio.Task] = []
     full_reply = ""
     t0 = time.time()
@@ -454,7 +459,10 @@ async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_t
             elif ev[0] == "voice":
                 voice_hint = ev[1]
             elif ev[0] == "sentence":
-                tasks.append(asyncio.create_task(_safe_ogg(ev[1], tts_params_for(emotion, voice_hint, quote=user_text))))
+                if is_whisper(voice_hint):
+                    whisper_sents.append(ev[1])
+                else:
+                    tasks.append(asyncio.create_task(_safe_ogg(ev[1], tts_params_for(emotion, voice_hint))))
             else:
                 _, full_reply, emotion = ev
     except Exception:
@@ -462,6 +470,8 @@ async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_t
         stop.set()
         await update.message.reply_text("嗚…人家剛剛恍神了啦，你再說一次好不好齁🥺")
         return
+    if whisper_sents and full_reply:
+        tasks.append(asyncio.create_task(_safe_ogg(full_reply, tts_params_for(emotion, voice_hint))))
     log.info("llm stream done in %.1fs, %d sentences, emotion=%s voice=%s", time.time() - t0, len(tasks), emotion, voice_hint or "-")
 
     oggs = await asyncio.gather(*tasks)

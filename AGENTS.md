@@ -55,7 +55,7 @@ pkill -f "[b]ot.py"                                # 停止（必须带 [b]，�
 ## 关键约定与坑
 
 - **密钥**：只放 `config.env` 和 `~/.openviking/ov.conf`，都在 gitignore。提交前确认 `git status` 不含 config.env。
-- **情绪系统**：LLM 通过 `reply` 工具调用交出 `{emotion, voice?, text}`，emotion 字段在 schema 里排前面（流式时先到）。情绪表达靠**语音指令**，走 `additions.context_texts`（官方字段是 **additions JSON 字符串里的 `context_texts`**，放 `req_params` 顶层会被静默忽略；不计费、不朗读）。指令必须写成纯"声音描写"（`用……的语气/哭腔说`），对话式互动指令（"撩撩我""你得跟我互怼"）实测失效；`[#指令]` 内联语法 API 不认识、会被当台词念出来，已废弃。生气/哭腔/纯气声悄悄话三条指令措辞经过官网参考音频对照验证（`test_tts_official.py`）。用户原话只能作引用上文放 context_texts，绝不拼进合成文本。**音色分工**：默认小和 `zh_female_xiaohe_uranus_bigtts`（自带台湾腔）；voice 提示命中"耳语/悄悄话/气声/asmr"时切 vv `zh_female_vv_uranus_bigtts` + 纯气声指令（小和情绪表现力实测弱于 vv）。`DOUBAO_CONTEXT` 留空。
+- **情绪系统**：LLM 通过 `reply` 工具调用交出 `{emotion, voice?, text}`，emotion 字段在 schema 里排前面（流式时先到）。情绪表达靠**语音指令**，走 `additions.context_texts`（官方字段是 **additions JSON 字符串里的 `context_texts`**，放 `req_params` 顶层会被静默忽略；不计费、不朗读）。指令必须写成纯"声音描写"（`用……的语气/哭腔说`），对话式互动指令（"撩撩我""你得跟我互怼"）实测失效；**context_texts 里只放一条纯指令**——混入引用上文/多条叠加/section_id 都会稀释效果（隔离实验实测）。`[#指令]` 内联和 `{{ }}` 句内标签 API 都不认识、会被当台词念出来，均已废弃。生气/哭腔/纯气声悄悄话三条指令措辞经过官网参考音频对照验证（`test_tts_official.py`）。**音色分工**：默认小和 `zh_female_xiaohe_uranus_bigtts`（自带台湾腔）；voice 提示命中"耳语/悄悄话/气声/asmr"时切 vv `zh_female_vv_uranus_bigtts` + 纯气声指令（小和情绪表现力实测弱于 vv），且**悄悄话整段一次合成**（分句并行合成气声会逐句漂移），由 process_message 攒句到流式结束后单段合成。`DOUBAO_CONTEXT` 留空。
 - **深度路由**：裁判模型用硅基流动 Qwen3-8B（关思考）。**不要用 seed-character 当裁判**——角色扮演模型做不了元分类，实测全判 CHAT。`reasoning_effort: high` 必须同时显式 `thinking: enabled`，否则 400。
 - **seed-tts**：文本放 `req_params.text` 经 TaskRequest 事件发送；payload 必须带 `user`/`event` 字段。
 - **OV 繁忙**：commit 提炼会占住 OV 服务器导致 recall 超时，这是预期行为（降级跳过，不阻塞回复）；频繁出现再考虑调队列。

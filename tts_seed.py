@@ -66,8 +66,9 @@ async def synth(
     context：语音指令/引用上文，走官方 additions.context_texts（JSON 字符串里的字段，
     不参与计费、不会被朗读；放 req_params 顶层会被服务端静默忽略）。
     指令必须写成纯粹的"声音描写"（用……的语气/哭腔说），对话式互动指令（"撩撩我"
-    "你得跟我互怼"）会失效。[#指令] 内联语法 API 不认识，会被念出来，已废弃。
-    voice：留空用 DOUBAO_VOICE 环境变量。
+    "你得跟我互怼"）会失效；context_texts 里混入指令以外的内容（引用上文、多条指令
+    叠加）也会稀释效果——实测纯指令单条最稳。[#指令] 内联语法 API 不认识，会被念出来，
+    已废弃。voice：留空用 DOUBAO_VOICE 环境变量。
     """
     key = os.environ["DOUBAO_API_KEY"]
     if not voice:
