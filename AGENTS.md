@@ -1,0 +1,60 @@
+# cyber-gf
+
+赛博女友「暖暖」（温以暖）：Telegram 上的陪伴型 AI agent，台湾腔女声，文字+语音双通道，有长期记忆和主动关心能力。
+
+## 运行环境
+
+- 服务器：2核4G 低配，无 sudo。Python 3.14（系统无 ensurepip，建虚拟环境用 `python3 -m virtualenv`，不要用 `python3 -m venv`）
+- ffmpeg 是项目根目录下的静态二进制（`./ffmpeg`），不是系统安装
+- 网络走代理；本地服务（OpenViking）必须走 `NO_PROXY`，否则慢好几秒
+- 无 GPU，ASR 用 faster-whisper base 跑 CPU
+
+## 启动 / 停止
+
+```bash
+cd ~/cyber-gf && nohup ./run.sh > bot.log 2>&1 &   # 启动
+pkill -f "[b]ot.py"                                # 停止（必须带 [b]，否则误杀自己的 shell）
+```
+
+依赖的外部服务：OpenViking（`~/openviking`，`127.0.0.1:1933`，运维命令见 `~/openviking/INTEGRATION.md`）。OpenViking 挂了不影响聊天，记忆自动降级。
+
+## 架构
+
+```
+消息(文字/语音) → bot.py
+  ├─ ov_memory.recall   OpenViking 语义检索（peer 空间优先，8s 超时降级）
+  ├─ judge_depth        深度路由：闲聊 minimal(关思考) / 走心 high(开思考)
+  ├─ chat_stream        seed-character 流式 + reply 工具调用（emotion 先行）
+  └─ seed-tts-2.0       按句并行合成，情绪→语气/语速/音调，语音先发文字后到
+每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆；心跳每 45 分钟主动关心（NO_REPLY 契约）
+```
+
+## 文件职责（改哪里）
+
+| 文件 | 职责 |
+|------|------|
+| `soul/IDENTITY.md` | 她是谁：名字、存在形式、vibe、生日 |
+| `soul/SOUL.md` | 性格、说话风格、小世界、边界。改人设只动这里，每条消息实时加载，改完不用重启 |
+| `soul/USER.md` | 用户画像（指令式条目，带 observed/status 元数据） |
+| `bot.py` | 主流程：Telegram 接入、深度路由、流式编排、TTS 参数映射（EMOTIONS 表）、心跳 |
+| `ov_memory.py` | OpenViking 封装：recall / record_turn(commit) / healthy |
+| `memory.py` | 本地兜底记忆（OV 不可用时）+ 历史持久化（`data/<uid>.json`） |
+| `tts_seed.py` + `tts_protocols.py` | 豆包 seed-tts-2.0 WebSocket 双向流式协议实现 |
+| `config.env` | 所有密钥和开关（已 gitignore，**绝不提交**） |
+| `思考设置.md` / `调用指南.md` | 方舟 thinking 文档 / seed-tts 协议文档（参考用） |
+
+## 关键约定与坑
+
+- **密钥**：只放 `config.env` 和 `~/.openviking/ov.conf`，都在 gitignore。提交前确认 `git status` 不含 config.env。
+- **情绪系统**：LLM 通过 `reply` 工具调用交出 `{emotion, text}`，emotion 字段在 schema 里排前面（流式时先到）。EMOTIONS 表映射到 TTS 的 context_texts/speech_rate/pitch。
+- **深度路由**：裁判模型用硅基流动 Qwen3-8B（关思考）。**不要用 seed-character 当裁判**——角色扮演模型做不了元分类，实测全判 CHAT。`reasoning_effort: high` 必须同时显式 `thinking: enabled`，否则 400。
+- **seed-tts**：文本放 `req_params.text` 经 TaskRequest 事件发送；payload 必须带 `user`/`event` 字段。
+- **OV 繁忙**：commit 提炼会占住 OV 服务器导致 recall 超时，这是预期行为（降级跳过，不阻塞回复）；频繁出现再考虑调队列。
+- 测试产生的 `data/<假uid>.json` 和 OV 里的测试记忆要及时清掉，别污染她的记忆。
+- pkill/pgrep 匹配进程名时用 `[b]ot.py` 这种写法，防止模式匹配到执行命令自身的 shell。
+
+## Git 工作流
+
+- 远端：git@github-cyber-gf:eason522/cyber-gf.git（deploy key: `~/.ssh/cyber_gf_deploy`，Host 别名 github-cyber-gf 在 `~/.ssh/config`）
+- **每完成一次开发就 commit + push**（用户硬性要求），commit message 用中文写清楚改动
+- 提交署名：`git -c user.name="eason" -c user.email="eason@cyber-gf.local"`
