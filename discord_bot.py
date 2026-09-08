@@ -22,7 +22,8 @@ DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 
 intents = discord.Intents.default()
 intents.message_content = True
-client = discord.Client(intents=intents)
+# aiohttp 默认不读代理环境变量，网络走代理必须显式传
+client = discord.Client(intents=intents, proxy=os.getenv("HTTPS_PROXY") or os.getenv("https_proxy"))
 
 
 def _touch_contact(message: discord.Message) -> None:

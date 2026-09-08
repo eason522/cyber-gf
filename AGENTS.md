@@ -10,7 +10,7 @@
 
 - 服务器：2核4G 低配，无 sudo。Python 3.14（系统无 ensurepip，建虚拟环境用 `python3 -m virtualenv`，不要用 `python3 -m venv`）
 - ffmpeg 是项目根目录下的静态二进制（`./ffmpeg`），不是系统安装
-- 网络走代理；本地服务（OpenViking）必须走 `NO_PROXY`，否则慢好几秒
+- 网络走代理；本地服务（OpenViking）必须走 `NO_PROXY`，否则慢好几秒；**Discord 的 aiohttp 不读代理环境变量**，discord_bot.py 里已显式传 `proxy=`
 - 无 GPU，ASR 用 faster-whisper base 跑 CPU
 
 ## 启动 / 停止
