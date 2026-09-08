@@ -65,7 +65,7 @@ async def process_message(message: discord.Message, user_text: str,
             elif ev[0] == "voice":
                 voice_hint = ev[1]
             elif ev[0] == "sentence":
-                tasks.append(asyncio.create_task(bot._safe_ogg(ev[1], bot.tts_params_for(emotion, voice_hint))))
+                tasks.append(asyncio.create_task(bot._safe_ogg(ev[1], bot.tts_params_for(emotion, voice_hint, quote=user_text))))
             else:
                 _, full_reply, emotion = ev
     except Exception:

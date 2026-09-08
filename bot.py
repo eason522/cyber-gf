@@ -129,36 +129,24 @@ REPLY_TOOL = [{
     },
 }]
 
+# 情绪 → seed-tts-2.0 语音指令（context_texts）。实测 vv 音色靠自然语言指令驱动情绪，
+# 外部数值参数（pitch/speech_rate/loudness）反而会干扰模型自己的演绎，全部弃用
 EMOTIONS = {
-    "撒娇": {"context": "用特别撒娇、软软糯糯的语气说话", "speech_rate": -10, "pitch": 4, "loudness": -8},
-    "温柔": {"context": "用特别温柔、轻声的语气说话", "speech_rate": -12, "pitch": 1, "loudness": -15},
-    "开心": {"context": "用特别开心、轻快雀跃的语气说话", "speech_rate": 15, "pitch": 6, "loudness": 8},
-    "难过": {"context": "用非常难过、委屈巴巴的语气说话", "speech_rate": -20, "pitch": -6, "loudness": -15},
-    "生气": {"context": "用非常生气、凶巴巴闹别扭的语气说话", "speech_rate": 20, "pitch": 6, "loudness": 15},
-    "害羞": {"context": "用非常害羞、轻声细语的语气说话", "speech_rate": -8, "pitch": 3, "loudness": -20},
-    "平静": {"context": "", "speech_rate": 0, "pitch": 0, "loudness": 0},
+    "撒娇": "用撒娇、软软糯糯、甜腻的语气说",
+    "温柔": "用温柔、轻声、宠溺的语气说",
+    "开心": "用开心、轻快、雀跃的语气说",
+    "难过": "用难过、委屈、带着点哭腔的语气说",
+    "生气": "用生气、闹别扭、凶巴巴的语气说",
+    "害羞": "用害羞、犹豫、轻声细语的语气说",
+    "平静": "",
 }
 
-# 演绎提示 → 硬参数微调（叠在情绪参数上）。实测 loudness -25 仅轻 2.4dB 几乎无感，
-# 耳语级别需要 -45（约轻 6dB）
-VOICE_HINT_RULES = [
-    (("耳语", "悄悄", "气声", "轻声"), {"loudness": -45, "speech_rate": -10, "pitch": -2}),
-    (("喊", "大叫", "大声"), {"loudness": 25, "speech_rate": 15, "pitch": 3}),
-    (("哭腔", "哽咽", "哭着"), {"loudness": -5, "speech_rate": -10, "pitch": -3}),
-    (("慵懒", "拖着尾音", "困倦"), {"loudness": -15, "speech_rate": -18, "pitch": -2}),
-]
 
-
-def tts_params_for(emotion: str, voice_hint: str = "") -> dict:
-    """情绪基础参数 + 演绎提示：提示文本并进 context_texts，已知演绎方式叠加硬参数。"""
-    p = dict(EMOTIONS.get(emotion, EMOTIONS["平静"]))
-    if voice_hint:
-        p["context"] = "，".join(x for x in (p.get("context", ""), voice_hint) if x)
-        for keys, override in VOICE_HINT_RULES:
-            if any(k in voice_hint for k in keys):
-                p.update(override)
-                break
-    return p
+def tts_params_for(emotion: str, voice_hint: str = "", quote: str = "") -> dict:
+    """组装 TTS 语境：引用上文（用户原话，只引用不合成，模型承接语境情绪）
+    + 情绪语音指令 + 她自写的演绎指令（voice 字段）。"""
+    ctx = [c for c in (quote, EMOTIONS.get(emotion, ""), voice_hint.strip()) if c]
+    return {"context": ctx}
 
 # 深度路由：明显日常的短消息走快速通道，拿不准的问裁判模型
 DEEP_KEYWORDS = ("爱", "想你", "思念", "难过", "伤心", "哭", "emo", "分手", "纪念日",
@@ -452,7 +440,7 @@ async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_t
             elif ev[0] == "voice":
                 voice_hint = ev[1]
             elif ev[0] == "sentence":
-                tasks.append(asyncio.create_task(_safe_ogg(ev[1], tts_params_for(emotion, voice_hint))))
+                tasks.append(asyncio.create_task(_safe_ogg(ev[1], tts_params_for(emotion, voice_hint, quote=user_text))))
             else:
                 _, full_reply, emotion = ev
     except Exception:
@@ -562,7 +550,7 @@ async def heartbeat_loop(send) -> None:
             mem.save(uid, store)
             ogg = None
             try:
-                ogg = await tts_to_ogg(text, EMOTIONS.get(emotion, EMOTIONS["平静"]))
+                ogg = await tts_to_ogg(text, tts_params_for(emotion))
             except Exception:
                 log.exception("heartbeat tts failed")
             try:

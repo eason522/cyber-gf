@@ -54,12 +54,15 @@ async def synth(
     text: str,
     out_mp3: Path,
     *,
-    context: str = "",
+    context: "str | list[str]" = "",
     speech_rate: int = 0,
     loudness: int = 0,
     pitch: int = 0,
 ) -> None:
-    """豆包 seed-tts-2.0 双向流式合成（一次性整段文本）。失败抛异常，由调用方回退。"""
+    """豆包 seed-tts-2.0 双向流式合成（一次性整段文本）。失败抛异常，由调用方回退。
+
+    context 可传字符串或列表（引用上文/情绪指令/演绎指令多条），均只作语境不合成。
+    """
     key = os.environ["DOUBAO_API_KEY"]
     voice = os.getenv("DOUBAO_VOICE", "zh_female_xiaohe_uranus_bigtts")
     base_ctx = os.getenv("DOUBAO_CONTEXT", "").strip()
@@ -84,7 +87,11 @@ async def synth(
                 "max_length_to_filter_parenthesis": 100,
             }),
         }
-        contexts = [c for c in (base_ctx, context.strip()) if c]
+        if isinstance(context, str):
+            ctx_list = [context.strip()] if context.strip() else []
+        else:
+            ctx_list = [c.strip() for c in context if c and c.strip()]
+        contexts = ([base_ctx] if base_ctx else []) + ctx_list
         if contexts:
             req_params["context_texts"] = contexts
         if pitch:
