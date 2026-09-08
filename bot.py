@@ -143,11 +143,14 @@ EMOTIONS = {
 
 
 def tts_params_for(emotion: str, voice_hint: str = "", quote: str = "") -> dict:
-    """组装 TTS 语境：引用上文（用户原话，只引用不合成，模型承接语境情绪）
-    + 情绪语音指令 + 她自写的演绎指令（voice 字段）。
-    生效前提：tts_seed 用 seed-tts-2.0-expressive（standard 版会丢弃全部语音指令）。"""
-    ctx = [c for c in (quote, EMOTIONS.get(emotion, ""), voice_hint.strip()) if c]
-    return {"context": ctx}
+    """语音指令内联在合成文本前（[#指令] 语法，官网实测唯一有效形式；context_texts 无效）。
+    注意：只有"指令"能内联——用户原话内联会被念出来（实测），引用上文只能放 context_texts。
+    内联指令计入计费字符数。"""
+    instruction = "；".join(c for c in (EMOTIONS.get(emotion, ""), voice_hint.strip()) if c)
+    return {
+        "inline": [instruction] if instruction else [],
+        "context": [quote] if quote else [],
+    }
 
 # 深度路由：明显日常的短消息走快速通道，拿不准的问裁判模型
 DEEP_KEYWORDS = ("爱", "想你", "思念", "难过", "伤心", "哭", "emo", "分手", "纪念日",

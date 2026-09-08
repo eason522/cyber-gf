@@ -55,6 +55,7 @@ async def synth(
     out_mp3: Path,
     *,
     context: "str | list[str]" = "",
+    inline: "list[str] | None" = None,
     speech_rate: int = 0,
     loudness: int = 0,
     pitch: int = 0,
@@ -62,15 +63,14 @@ async def synth(
 ) -> None:
     """豆包 seed-tts-2.0 双向流式合成（一次性整段文本）。失败抛异常，由调用方回退。
 
-    context 可传字符串或列表（引用上文/情绪指令/演绎指令多条），均只作语境不合成。
-    model 默认 seed-tts-2.0-expressive：standard 版会丢弃语音指令/标签（官方文档明确），
-    只有 expressive 版才支持情绪演绎。
+    inline：语音指令/引用上文，以 [#指令] 语法拼在 text 前面（模型只解析不朗读，
+    官网实测有效的指令形式；context/context_texts 参数实测无效果）。
     """
     key = os.environ["DOUBAO_API_KEY"]
     voice = os.getenv("DOUBAO_VOICE", "zh_female_xiaohe_uranus_bigtts")
     base_ctx = os.getenv("DOUBAO_CONTEXT", "").strip()
     if not model:
-        model = os.getenv("DOUBAO_TTS_MODEL", "seed-tts-2.0-expressive")
+        model = os.getenv("DOUBAO_TTS_MODEL", "")  # 默认 standard 子版本，官网页面同款
     headers = {"X-Api-Key": key, "X-Api-Resource-Id": "seed-tts-2.0"}
     audio = bytearray()
     async with websockets.connect(URL, additional_headers=headers, max_size=16 * 1024 * 1024) as ws:
@@ -106,6 +106,8 @@ async def synth(
         await start_session(ws, _payload(EventType.StartSession, req_params), session_id)
         await _wait_event(ws, EventType.SessionStarted)
 
+        if inline:
+            text = "".join(f"[#{c}]" for c in inline if c) + text
         await task_request(ws, _payload(EventType.TaskRequest, {"text": text}), session_id)
         await finish_session(ws, session_id)
 
