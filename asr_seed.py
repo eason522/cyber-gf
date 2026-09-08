@@ -50,13 +50,13 @@ def _extract_hints(result: dict, top: dict) -> list[str]:
         dominant = max(set(emotions), key=emotions.count)
         if dominant in EMOTION_ZH:
             hints.append(f"他说这段话时语气听起来有点{EMOTION_ZH[dominant]}")
-    # 语种标签可能在顶层 additions 或分句 additions
-    lang = ((top.get("additions") or {}).get("lid")
-            or (result.get("additions") or {}).get("lid"))
+    # 语种标签在 result.additions.lid_lang（实测），也可能出现在分句 additions
+    lang = ((result.get("additions") or {}).get("lid_lang")
+            or (top.get("additions") or {}).get("lid_lang"))
     if not lang:
         for u in utts:
-            if isinstance(u, dict) and (u.get("additions") or {}).get("lid"):
-                lang = u["additions"]["lid"]
+            if isinstance(u, dict) and (u.get("additions") or {}).get("lid_lang"):
+                lang = u["additions"]["lid_lang"]
                 break
     if lang in LANG_ZH:
         hints.append(f"他说的是{LANG_ZH[lang]}")
