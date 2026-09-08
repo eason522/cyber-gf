@@ -33,7 +33,7 @@ def _touch_contact(message: discord.Message) -> None:
 async def _keepalive_typing(channel, stop: asyncio.Event) -> None:
     while not stop.is_set():
         try:
-            await channel.trigger_typing()
+            await channel.typing()
         except Exception:
             pass
         try:
@@ -79,7 +79,7 @@ async def process_message(message: discord.Message, user_text: str,
     for ogg in oggs:
         if not ogg:
             continue
-        await channel.trigger_typing()
+        await channel.typing()
         await channel.send(file=discord.File(str(ogg), filename="voice.ogg"))
         ogg.unlink(missing_ok=True)
     await _send_text(channel, full_reply)  # 文字最后到
