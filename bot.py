@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -323,6 +324,47 @@ def transcribe(path: str) -> str:
     return "".join(seg.text for seg in segments).strip()
 
 
+# 云端 ASR：主模型 doubao-seed-character 不支持音频输入（实测 400），
+# 用方舟音频理解模型转写；失败时回退本地 whisper。设 ASR_MODEL= 可关掉云端转写。
+ASR_MODEL = os.getenv("ASR_MODEL", "doubao-seed-2-0-mini-260428")
+ASR_PROMPT = "你是语音识别专家。只输出这段语音的转写文本，不要输出任何解释或多余内容；听不清就输出空。"
+
+
+async def asr_cloud(path: Path) -> str:
+    """音频先转 mp3（方舟 input_audio 不支持 ogg），再 base64 传给音频理解模型。"""
+    mp3 = path
+    tmp = None
+    if path.suffix != ".mp3":
+        tmp = Path(tempfile.mktemp(suffix=".mp3"))
+        subprocess.run([FFMPEG, "-y", "-i", str(path), "-b:a", "32k", str(tmp)],
+                       check=True, capture_output=True)
+        mp3 = tmp
+    try:
+        data = base64.b64encode(mp3.read_bytes()).decode()
+        r = await llm.chat.completions.create(
+            model=ASR_MODEL,
+            messages=[{"role": "user", "content": [
+                {"type": "input_audio", "input_audio": {"data": data, "format": "mp3"}},
+                {"type": "text", "text": ASR_PROMPT},
+            ]}],
+            max_tokens=300,
+        )
+        return (r.choices[0].message.content or "").strip()
+    finally:
+        if tmp:
+            tmp.unlink(missing_ok=True)
+
+
+async def asr_transcribe(path: str) -> str:
+    """语音转文字统一入口：云端优先，本地 whisper 兜底。"""
+    if ASR_MODEL:
+        try:
+            return await asr_cloud(Path(path))
+        except Exception:
+            log.exception("cloud asr failed, fallback to whisper")
+    return await asyncio.to_thread(transcribe, path)
+
+
 SENT_SPLIT = re.compile(r"(?<=[。！？!?；;~…\n])")
 
 
@@ -399,7 +441,7 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         store = get_store(update.effective_user.id)
         ctx_query = " ".join(m["content"] for m in store["history"][-2:] if m.get("content"))
         pre_recall = asyncio.create_task(ov_memory.recall(ctx_query)) if ctx_query else None
-        user_text = await asyncio.to_thread(transcribe, str(ogg_in))
+        user_text = await asr_transcribe(str(ogg_in))
         log.info("asr: %s", user_text)
         if not user_text:
             if pre_recall:

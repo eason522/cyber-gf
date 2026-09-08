@@ -93,7 +93,7 @@ async def _on_audio(message: discord.Message, attachment: discord.Attachment):
         store = bot.get_store(message.author.id)
         ctx_query = " ".join(m["content"] for m in store["history"][-2:] if m.get("content"))
         pre_recall = asyncio.create_task(ov_memory.recall(ctx_query)) if ctx_query else None
-        user_text = await asyncio.to_thread(bot.transcribe, str(audio_in))
+        user_text = await bot.asr_transcribe(str(audio_in))
         log.info("asr: %s", user_text)
         if not user_text:
             if pre_recall:

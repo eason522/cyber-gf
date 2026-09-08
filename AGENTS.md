@@ -11,7 +11,9 @@
 - 服务器：2核4G 低配，无 sudo。Python 3.14（系统无 ensurepip，建虚拟环境用 `python3 -m virtualenv`，不要用 `python3 -m venv`）
 - ffmpeg 是项目根目录下的静态二进制（`./ffmpeg`），不是系统安装
 - 网络走代理；本地服务（OpenViking）必须走 `NO_PROXY`，否则慢好几秒；**Discord 的 aiohttp 不读代理环境变量**，discord_bot.py 里已显式传 `proxy=`
-- 无 GPU，ASR 用 faster-whisper base 跑 CPU
+- 无 GPU；ASR 已改走云端（方舟音频理解，`ASR_MODEL` 控制，ogg 需先转 mp3——`input_audio` 不吃 ogg），本地 whisper 只做兜底
+- **主模型 doubao-seed-character 不支持音频输入**（实测 400 "audio input is not supported"），别再把用户语音直接喂给它；seed-tts-2.0 也只进文本（纯 TTS 接口）
+- 无 GPU，本地 ASR 兜底用 faster-whisper base 跑 CPU（平常走云端）
 
 ## 启动 / 停止
 
@@ -26,6 +28,7 @@ pkill -f "[b]ot.py"                                # 停止（必须带 [b]，�
 
 ```
 消息(文字/语音) → bot.py
+  ├─ asr_transcribe     语音入口：云端 ASR（方舟 doubao-seed-2-0-mini 音频理解），失败回退本地 whisper
   ├─ ov_memory.recall   OpenViking 语义检索（peer 空间优先，8s 超时降级）
   ├─ judge_depth        深度路由：闲聊 minimal(关思考) / 走心 high(开思考)
   ├─ chat_stream        seed-character 流式 + reply 工具调用（emotion 先行）
