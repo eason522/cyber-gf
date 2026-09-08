@@ -50,7 +50,7 @@ pkill -f "[b]ot.py"                                # 停止（必须带 [b]，�
 | `tts_seed.py` + `tts_protocols.py` | 豆包 seed-tts-2.0 WebSocket 双向流式协议实现 |
 | `asr_seed.py` | 豆包录音文件识别 2.0（volc.seedasr.auc）：提交+轮询，吃音频 URL（TG 文件链接/Discord CDN），返回文本+情绪/方言提示。**需在语音控制台开通该服务**，否则报 45000030；`ASR_SEED=0` 可关闭。openspeech 直连不走代理 |
 | `config.env` | 所有密钥和开关（已 gitignore，**绝不提交**） |
-| `思考设置.md` / `调用指南.md` / `录音文件识别-*.md` | 方舟 thinking 文档 / seed-tts 协议文档 / seedasr 录音识别文档（参考用） |
+| `参考文档音频/` | 方舟官方文档（thinking / seed-tts 协议 / 语音指令与标签 / seedasr 录音识别）+ 官网效果参考 wav（对照测试用） |
 
 ## 关键约定与坑
 
