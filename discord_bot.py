@@ -49,13 +49,15 @@ async def _send_text(channel, text: str) -> None:
 
 async def process_message(message: discord.Message, user_text: str,
                           recall_task: asyncio.Task | None = None):
-    """与 bot.process_message 同构：流式生成，句子一完整就并行合成，语音按序先发，完整文字最后到。"""
+    """与 bot.process_message 同构：≤350字（或悄悄话）整段一次合成，超长才按句并行；语音按序先发，完整文字最后到。"""
     channel = message.channel
     stop = asyncio.Event()
     keepalive = asyncio.create_task(_keepalive_typing(channel, stop))
     emotion = "平静"
     voice_hint = ""
-    whisper_sents: list[str] = []  # 悄悄话场景攒整段，流式结束后一次合成（分句合成气声会漂）
+    whisper = False
+    pending: list[str] = []  # 未派发的句子缓冲（攒整段用）
+    split = False            # 累计超阈值后转逐句并行合成
     tasks: list[asyncio.Task] = []
     full_reply = ""
     t0 = time.time()
@@ -65,11 +67,19 @@ async def process_message(message: discord.Message, user_text: str,
                 emotion = ev[1]
             elif ev[0] == "voice":
                 voice_hint = ev[1]
+                whisper = bot.is_whisper(voice_hint)
             elif ev[0] == "sentence":
-                if bot.is_whisper(voice_hint):
-                    whisper_sents.append(ev[1])
-                else:
+                if whisper:
+                    continue  # 悄悄话攒整段（分句合成气声会逐句漂移）
+                if split:
                     tasks.append(asyncio.create_task(bot._safe_ogg(ev[1], bot.tts_params_for(emotion, voice_hint))))
+                else:
+                    pending.append(ev[1])
+                    if sum(map(len, pending)) > bot.WHOLE_TTS_MAX:
+                        split = True
+                        for s in pending:
+                            tasks.append(asyncio.create_task(bot._safe_ogg(s, bot.tts_params_for(emotion, voice_hint))))
+                        pending.clear()
             else:
                 _, full_reply, emotion = ev
     except Exception:
@@ -78,9 +88,9 @@ async def process_message(message: discord.Message, user_text: str,
         keepalive.cancel()
         await channel.send("嗚…人家剛剛恍神了啦，你再說一次好不好齁🥺")
         return
-    if whisper_sents and full_reply:
+    if not split and full_reply:
         tasks.append(asyncio.create_task(bot._safe_ogg(full_reply, bot.tts_params_for(emotion, voice_hint))))
-    log.info("llm stream done in %.1fs, %d sentences, emotion=%s voice=%s", time.time() - t0, len(tasks), emotion, voice_hint or "-")
+    log.info("llm stream done in %.1fs, %d sentences, emotion=%s voice=%s split=%s", time.time() - t0, len(tasks), emotion, voice_hint or "-", split)
 
     oggs = await asyncio.gather(*tasks)
     stop.set()
