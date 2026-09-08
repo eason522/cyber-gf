@@ -1,6 +1,10 @@
 # cyber-gf
 
-赛博女友「暖暖」（温以暖）：Telegram 上的陪伴型 AI agent，台湾腔女声，文字+语音双通道，有长期记忆和主动关心能力。
+赛博女友「暖暖」（温以暖）：Telegram / Discord 双平台的陪伴型 AI agent，台湾腔女声，文字+语音双通道，有长期记忆和主动关心能力。
+
+## 平台切换
+
+`config.env` 里 `BOT_PLATFORM=telegram|discord` 二选一（默认 telegram），改完重启 `run.sh` 生效。Discord 模式需要填 `DISCORD_TOKEN`，且开发者门户里要开 **Message Content Intent**。心跳只在最后聊过的平台发（contact.json 带 platform 字段）。
 
 ## 运行环境
 
@@ -36,7 +40,8 @@ pkill -f "[b]ot.py"                                # 停止（必须带 [b]，�
 | `soul/IDENTITY.md` | 她是谁：名字、存在形式、vibe、生日 |
 | `soul/SOUL.md` | 性格、说话风格、小世界、边界。改人设只动这里，每条消息实时加载，改完不用重启 |
 | `soul/USER.md` | 用户画像（指令式条目，带 observed/status 元数据） |
-| `bot.py` | 主流程：Telegram 接入、深度路由、流式编排、TTS 参数映射（EMOTIONS 表）、心跳 |
+| `bot.py` | 核心流水线 + Telegram 接入：平台分发（main→run_telegram/discord_bot.run）、深度路由、流式编排、TTS 参数映射（EMOTIONS 表）、心跳（heartbeat_loop 接收平台 send 回调） |
+| `discord_bot.py` | Discord 接入层：私信或 @机器人 触发，复用 bot.py 的 chat_stream/TTS/心跳；语音以 ogg 音频附件发送（Discord 机器人不能发原生语音条），收语音靠音频附件 |
 | `ov_memory.py` | OpenViking 封装：recall / record_turn(commit) / healthy |
 | `memory.py` | 本地兜底记忆（OV 不可用时）+ 历史持久化（`data/<uid>.json`） |
 | `tts_seed.py` + `tts_protocols.py` | 豆包 seed-tts-2.0 WebSocket 双向流式协议实现 |

@@ -29,7 +29,8 @@ log = logging.getLogger("cyber-gf")
 BASE_DIR = Path(__file__).parent
 FFMPEG = str(BASE_DIR / "ffmpeg")
 
-TG_TOKEN = os.environ["TG_TOKEN"]
+BOT_PLATFORM = os.getenv("BOT_PLATFORM", "telegram")  # telegram | discord
+TG_TOKEN = os.getenv("TG_TOKEN", "")  # discord 模式下可缺省
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
 LLM_API_KEY = os.environ["LLM_API_KEY"]
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
@@ -56,9 +57,11 @@ def _load_contact() -> dict:
         return {}
 
 
-def _save_contact(user_id: int, chat_id: int) -> None:
+def _save_contact(user_id: int, chat_id: int, platform: str = "telegram") -> None:
     CONTACT_FILE.parent.mkdir(exist_ok=True)
-    CONTACT_FILE.write_text(json.dumps({"user_id": user_id, "chat_id": chat_id, "ts": time.time()}))
+    CONTACT_FILE.write_text(json.dumps({
+        "user_id": user_id, "chat_id": chat_id, "platform": platform, "ts": time.time(),
+    }))
 
 _whisper = None
 
@@ -416,14 +419,19 @@ def _touch_contact(update: Update) -> None:
     _save_contact(update.effective_user.id, update.effective_chat.id)
 
 
-async def heartbeat_loop(app: Application) -> None:
-    """静默契约：没事就 NO_REPLY，绝不打扰。"""
+async def heartbeat_loop(send) -> None:
+    """静默契约：没事就 NO_REPLY，绝不打扰。
+
+    send(chat_id, text, ogg)：平台相关的主动发消息回调，ogg 为语音文件路径（TTS 失败时为 None）。
+    """
     await asyncio.sleep(120)  # 启动后先等两分钟
     while True:
         try:
             contact = _load_contact()
             if not contact:
                 continue
+            if contact.get("platform", "telegram") != BOT_PLATFORM:
+                continue  # 最后在另一个平台聊的，不在本平台打扰
             hour = time.localtime().tm_hour
             if not (ACTIVE_HOURS[0] <= hour < ACTIVE_HOURS[1]):
                 continue
@@ -459,17 +467,19 @@ async def heartbeat_loop(app: Application) -> None:
             log.info("heartbeat: reaching out (%s): %s", emotion, text[:50])
             store["history"].append({"role": "assistant", "content": text})
             mem.save(uid, store)
-            chat_id = contact["chat_id"]
-            await app.bot.send_message(chat_id, text)
-            tts_params = EMOTIONS.get(emotion, EMOTIONS["平静"])
+            ogg = None
             try:
-                ogg = await tts_to_ogg(text, tts_params)
-                await app.bot.send_voice(chat_id, voice=ogg.read_bytes())
-                ogg.unlink(missing_ok=True)
+                ogg = await tts_to_ogg(text, EMOTIONS.get(emotion, EMOTIONS["平静"]))
             except Exception:
                 log.exception("heartbeat tts failed")
+            try:
+                await send(contact["chat_id"], text, ogg)
+            except Exception:
+                log.exception("heartbeat send failed")
+            if ogg:
+                ogg.unlink(missing_ok=True)
             contact["ts"] = time.time()
-            _save_contact(uid, chat_id)
+            _save_contact(uid, contact["chat_id"], BOT_PLATFORM)
         except Exception:
             log.exception("heartbeat error")
         finally:
@@ -484,15 +494,30 @@ async def _post_init(app: Application) -> None:
         loop.default_exception_handler(context)
 
     asyncio.get_running_loop().set_exception_handler(_exc_filter)
-    asyncio.create_task(heartbeat_loop(app))
+
+    async def tg_send(chat_id: int, text: str, ogg: Path | None) -> None:
+        await app.bot.send_message(chat_id, text)
+        if ogg:
+            await app.bot.send_voice(chat_id, voice=ogg.read_bytes())
+
+    asyncio.create_task(heartbeat_loop(tg_send))
 
 
-def main():
+def run_telegram() -> None:
     app = Application.builder().token(TG_TOKEN).post_init(_post_init).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(MessageHandler(filters.VOICE, on_voice))
-    log.info("bot started")
+    log.info("bot started (telegram)")
     app.run_polling()
+
+
+def main() -> None:
+    if BOT_PLATFORM == "discord":
+        import discord_bot
+
+        discord_bot.run()
+    else:
+        run_telegram()
 
 
 if __name__ == "__main__":
