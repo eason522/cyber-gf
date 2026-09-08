@@ -88,12 +88,18 @@ async def process_message(message: discord.Message, user_text: str,
 async def _on_audio(message: discord.Message, attachment: discord.Attachment):
     audio_in = Path(tempfile.mktemp(suffix=".ogg"))
     try:
-        await attachment.save(str(audio_in))
+        await attachment.save(str(audio_in))  # 本地文件留作降级链路
+        # 按附件类型推断 seedasr 的 format/codec（语音消息通常是 ogg opus）
+        ct = (attachment.content_type or "").lower()
+        ext = (attachment.filename or "").rsplit(".", 1)[-1].lower()
+        fmt = {"mpeg": "mp3", "mp3": "mp3", "x-m4a": "m4a", "m4a": "m4a", "wav": "wav"}.get(
+            ct.removeprefix("audio/"), ext if ext in ("mp3", "wav", "m4a", "aac") else "ogg")
+        codec = "opus" if fmt == "ogg" else ""
         # ASR 与记忆预检索并行（同 Telegram 路径）
         store = bot.get_store(message.author.id)
         ctx_query = " ".join(m["content"] for m in store["history"][-2:] if m.get("content"))
         pre_recall = asyncio.create_task(ov_memory.recall(ctx_query)) if ctx_query else None
-        user_text = await bot.asr_transcribe(str(audio_in))
+        user_text = await bot.asr_transcribe(str(audio_in), url=attachment.url, fmt=fmt, codec=codec)
         log.info("asr: %s", user_text)
         if not user_text:
             if pre_recall:

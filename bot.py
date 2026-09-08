@@ -355,14 +355,26 @@ async def asr_cloud(path: Path) -> str:
             tmp.unlink(missing_ok=True)
 
 
-async def asr_transcribe(path: str) -> str:
-    """语音转文字统一入口：云端优先，本地 whisper 兜底。"""
-    if ASR_MODEL:
+async def asr_transcribe(path: str | None = None, url: str | None = None,
+                         fmt: str = "ogg", codec: str = "") -> str:
+    """语音转文字统一入口：seedasr(URL 直传, 方言/情绪标签) → 方舟音频理解(本地文件) → 本地 whisper。"""
+    if url and os.getenv("ASR_SEED", "1") != "0" and os.getenv("DOUBAO_API_KEY"):
+        try:
+            import asr_seed
+
+            text, hints = await asr_seed.transcribe_url(url, fmt, codec)
+            if text:
+                return (f"（{'；'.join(hints)}）" if hints else "") + text
+        except Exception:
+            log.exception("seedasr failed, fallback")
+    if path and ASR_MODEL:
         try:
             return await asr_cloud(Path(path))
         except Exception:
             log.exception("cloud asr failed, fallback to whisper")
-    return await asyncio.to_thread(transcribe, path)
+    if path:
+        return await asyncio.to_thread(transcribe, path)
+    return ""
 
 
 SENT_SPLIT = re.compile(r"(?<=[。！？!?；;~…\n])")
@@ -436,12 +448,14 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ogg_in = Path(tempfile.mktemp(suffix=".ogg"))
     try:
         tg_file = await update.message.voice.get_file()
+        # seedasr 可直接拉取 TG 文件链接，无需本地下载；本地文件留作降级链路
+        file_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{tg_file.file_path}"
         await tg_file.download_to_drive(str(ogg_in))
         # ASR 与记忆预检索并行：whisper 识别的同时，用最近对话上下文先做语义检索
         store = get_store(update.effective_user.id)
         ctx_query = " ".join(m["content"] for m in store["history"][-2:] if m.get("content"))
         pre_recall = asyncio.create_task(ov_memory.recall(ctx_query)) if ctx_query else None
-        user_text = await asr_transcribe(str(ogg_in))
+        user_text = await asr_transcribe(str(ogg_in), url=file_url, fmt="ogg", codec="opus")
         log.info("asr: %s", user_text)
         if not user_text:
             if pre_recall:

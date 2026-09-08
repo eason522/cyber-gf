@@ -28,7 +28,7 @@ pkill -f "[b]ot.py"                                # 停止（必须带 [b]，�
 
 ```
 消息(文字/语音) → bot.py
-  ├─ asr_transcribe     语音入口：云端 ASR（方舟 doubao-seed-2-0-mini 音频理解），失败回退本地 whisper
+  ├─ asr_transcribe     语音入口三级降级：seedasr.auc 录音识别2.0(URL直传,方言/情绪标签) → 方舟 doubao-seed-2-0-mini 音频理解(本地文件base64) → 本地 whisper
   ├─ ov_memory.recall   OpenViking 语义检索（peer 空间优先，8s 超时降级）
   ├─ judge_depth        深度路由：闲聊 minimal(关思考) / 走心 high(开思考)
   ├─ chat_stream        seed-character 流式 + reply 工具调用（emotion 先行）
@@ -48,8 +48,9 @@ pkill -f "[b]ot.py"                                # 停止（必须带 [b]，�
 | `ov_memory.py` | OpenViking 封装：recall / record_turn(commit) / healthy |
 | `memory.py` | 本地兜底记忆（OV 不可用时）+ 历史持久化（`data/<uid>.json`） |
 | `tts_seed.py` + `tts_protocols.py` | 豆包 seed-tts-2.0 WebSocket 双向流式协议实现 |
+| `asr_seed.py` | 豆包录音文件识别 2.0（volc.seedasr.auc）：提交+轮询，吃音频 URL（TG 文件链接/Discord CDN），返回文本+情绪/方言提示。**需在语音控制台开通该服务**，否则报 45000030；`ASR_SEED=0` 可关闭。openspeech 直连不走代理 |
 | `config.env` | 所有密钥和开关（已 gitignore，**绝不提交**） |
-| `思考设置.md` / `调用指南.md` | 方舟 thinking 文档 / seed-tts 协议文档（参考用） |
+| `思考设置.md` / `调用指南.md` / `录音文件识别-*.md` | 方舟 thinking 文档 / seed-tts 协议文档 / seedasr 录音识别文档（参考用） |
 
 ## 关键约定与坑
 
