@@ -54,6 +54,7 @@ async def process_message(message: discord.Message, user_text: str,
     stop = asyncio.Event()
     keepalive = asyncio.create_task(_keepalive_typing(channel, stop))
     emotion = "平静"
+    voice_hint = ""
     tasks: list[asyncio.Task] = []
     full_reply = ""
     t0 = time.time()
@@ -61,8 +62,10 @@ async def process_message(message: discord.Message, user_text: str,
         async for ev in bot.chat_stream(message.author.id, user_text, recall_task=recall_task):
             if ev[0] == "emotion":
                 emotion = ev[1]
+            elif ev[0] == "voice":
+                voice_hint = ev[1]
             elif ev[0] == "sentence":
-                tasks.append(asyncio.create_task(bot._safe_ogg(ev[1], bot.EMOTIONS[emotion])))
+                tasks.append(asyncio.create_task(bot._safe_ogg(ev[1], bot.tts_params_for(emotion, voice_hint))))
             else:
                 _, full_reply, emotion = ev
     except Exception:

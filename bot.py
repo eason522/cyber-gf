@@ -116,6 +116,12 @@ REPLY_TOOL = [{
                     "enum": ["撒娇", "温柔", "开心", "难过", "生气", "害羞", "平静"],
                     "description": "这句话的主导情绪，先输出它",
                 },
+                "voice": {
+                    "type": "string",
+                    "description": "演绎方式（可选）：这句话要怎么念，写给语音合成的语气指令，"
+                                   "如「用气声耳语，声音很轻」「带着哭腔」「兴奋地喊出来」「慵懒地拖着尾音」。"
+                                   "普通说话就省略此字段",
+                },
                 "text": {"type": "string", "description": "口语台词：日常闲聊 1~3 句；系统提示走心时刻时，写 5~8 句的深情段落（至少100字），把心意说完整"},
             },
             "required": ["emotion", "text"],
@@ -124,14 +130,34 @@ REPLY_TOOL = [{
 }]
 
 EMOTIONS = {
-    "撒娇": {"context": "用撒娇、软软的语气说话", "speech_rate": -5, "pitch": 2},
-    "温柔": {"context": "用温柔、轻声的语气说话", "speech_rate": -8, "pitch": 0},
-    "开心": {"context": "用开心、轻快的语气说话", "speech_rate": 8, "pitch": 2},
-    "难过": {"context": "用难过、委屈的语气说话", "speech_rate": -10, "pitch": -2},
-    "生气": {"context": "用有点生气、闹别扭的语气说话", "speech_rate": 5, "pitch": 1},
-    "害羞": {"context": "用害羞、轻声细语的语气说话", "speech_rate": -5, "pitch": 1},
-    "平静": {"context": "", "speech_rate": 0, "pitch": 0},
+    "撒娇": {"context": "用撒娇、软软的语气说话", "speech_rate": -8, "pitch": 3, "loudness": -5},
+    "温柔": {"context": "用温柔、轻声的语气说话", "speech_rate": -10, "pitch": 1, "loudness": -10},
+    "开心": {"context": "用开心、轻快的语气说话", "speech_rate": 12, "pitch": 4, "loudness": 5},
+    "难过": {"context": "用难过、委屈的语气说话", "speech_rate": -15, "pitch": -4, "loudness": -10},
+    "生气": {"context": "用有点生气、闹别扭的语气说话", "speech_rate": 15, "pitch": 3, "loudness": 10},
+    "害羞": {"context": "用害羞、轻声细语的语气说话", "speech_rate": -5, "pitch": 2, "loudness": -15},
+    "平静": {"context": "", "speech_rate": 0, "pitch": 0, "loudness": 0},
 }
+
+# 演绎提示 → 硬参数微调（叠在情绪参数上），保证耳语这类演绎真的轻下来
+VOICE_HINT_RULES = [
+    (("耳语", "悄悄", "气声", "轻声"), {"loudness": -25, "speech_rate": -8}),
+    (("喊", "大叫", "大声"), {"loudness": 15, "speech_rate": 10}),
+    (("哭腔", "哽咽", "哭着"), {"loudness": -10, "speech_rate": -12}),
+    (("慵懒", "拖着尾音", "困倦"), {"loudness": -10, "speech_rate": -15}),
+]
+
+
+def tts_params_for(emotion: str, voice_hint: str = "") -> dict:
+    """情绪基础参数 + 演绎提示：提示文本并进 context_texts，已知演绎方式叠加硬参数。"""
+    p = dict(EMOTIONS.get(emotion, EMOTIONS["平静"]))
+    if voice_hint:
+        p["context"] = "，".join(x for x in (p.get("context", ""), voice_hint) if x)
+        for keys, override in VOICE_HINT_RULES:
+            if any(k in voice_hint for k in keys):
+                p.update(override)
+                break
+    return p
 
 # 深度路由：明显日常的短消息走快速通道，拿不准的问裁判模型
 DEEP_KEYWORDS = ("爱", "想你", "思念", "难过", "伤心", "哭", "emo", "分手", "纪念日",
@@ -174,6 +200,7 @@ async def judge_depth(user_text: str) -> str:
 
 TEXT_KEY = re.compile(r'"text"\s*:\s*"')
 EMOTION_RE = re.compile(r'"emotion"\s*:\s*"([^"]+)"')
+VOICE_RE = re.compile(r'"voice"\s*:\s*"([^"]+)"')
 
 
 def _json_unescape(s: str) -> str:
@@ -239,6 +266,7 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
     plain = ""  # 模型没走工具调用时的兜底
     emitted = 0  # 已产出的句段数
     emotion_seen: str | None = None
+    voice_seen: str | None = None
     try:
         async for chunk in stream:
             if not chunk.choices:
@@ -254,6 +282,11 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
                 if em:
                     emotion_seen = em.group(1)
                     yield ("emotion", emotion_seen)
+            if raw and voice_seen is None:
+                vm = VOICE_RE.search(raw)
+                if vm:
+                    voice_seen = vm.group(1)
+                    yield ("voice", voice_seen)
             decoded = _extract_stream_text(raw) if raw else plain
             parts = SENT_SPLIT.split(decoded)
             complete = [p.strip() for p in parts[:-1] if p.strip()]
@@ -407,6 +440,7 @@ async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_t
     stop = asyncio.Event()
     keepalive = asyncio.create_task(_keepalive_action(ctx.bot, chat_id, ChatAction.RECORD_VOICE, stop))
     emotion = "平静"
+    voice_hint = ""
     tasks: list[asyncio.Task] = []
     full_reply = ""
     t0 = time.time()
@@ -414,8 +448,10 @@ async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_t
         async for ev in chat_stream(update.effective_user.id, user_text, recall_task=recall_task):
             if ev[0] == "emotion":
                 emotion = ev[1]
+            elif ev[0] == "voice":
+                voice_hint = ev[1]
             elif ev[0] == "sentence":
-                tasks.append(asyncio.create_task(_safe_ogg(ev[1], EMOTIONS[emotion])))
+                tasks.append(asyncio.create_task(_safe_ogg(ev[1], tts_params_for(emotion, voice_hint))))
             else:
                 _, full_reply, emotion = ev
     except Exception:

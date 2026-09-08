@@ -56,6 +56,7 @@ async def synth(
     *,
     context: str = "",
     speech_rate: int = 0,
+    loudness: int = 0,
     pitch: int = 0,
 ) -> None:
     """豆包 seed-tts-2.0 双向流式合成（一次性整段文本）。失败抛异常，由调用方回退。"""
@@ -72,6 +73,8 @@ async def synth(
         audio_params = {"format": "mp3", "sample_rate": 24000}
         if speech_rate:
             audio_params["speech_rate"] = speech_rate
+        if loudness:
+            audio_params["loudness_rate"] = loudness
         req_params = {
             "speaker": voice,
             "audio_params": audio_params,
