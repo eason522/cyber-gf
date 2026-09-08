@@ -63,8 +63,11 @@ async def synth(
 ) -> None:
     """豆包 seed-tts-2.0 双向流式合成（一次性整段文本）。失败抛异常，由调用方回退。
 
-    inline：语音指令/引用上文，以 [#指令] 语法拼在 text 前面（模型只解析不朗读，
-    官网实测有效的指令形式；context/context_texts 参数实测无效果）。
+    context：语音指令/引用上文，走官方 additions.context_texts（JSON 字符串里的字段，
+    不参与计费、不会被朗读；放 req_params 顶层会被服务端静默忽略——这是之前实测
+    "context_texts 无效"的根因）。
+    inline：[#指令] 语法拼在 text 前面（官网体验页示例的形式），指令内容不计费但
+    引用上文内联会被念出来，引用上文请走 context。
     """
     key = os.environ["DOUBAO_API_KEY"]
     voice = os.getenv("DOUBAO_VOICE", "zh_female_xiaohe_uranus_bigtts")
@@ -83,24 +86,25 @@ async def synth(
             audio_params["speech_rate"] = speech_rate
         if loudness:
             audio_params["loudness_rate"] = loudness
-        req_params = {
-            "speaker": voice,
-            "audio_params": audio_params,
-            "additions": json.dumps({
-                "disable_emoji_filter": True,
-                "disable_markdown_filter": True,
-                "max_length_to_filter_parenthesis": 100,
-            }),
+        additions = {
+            "disable_emoji_filter": True,
+            "disable_markdown_filter": True,
+            "max_length_to_filter_parenthesis": 100,
         }
-        if model:
-            req_params["model"] = model
         if isinstance(context, str):
             ctx_list = [context.strip()] if context.strip() else []
         else:
             ctx_list = [c.strip() for c in context if c and c.strip()]
         contexts = ([base_ctx] if base_ctx else []) + ctx_list
         if contexts:
-            req_params["context_texts"] = contexts
+            additions["context_texts"] = contexts
+        req_params = {
+            "speaker": voice,
+            "audio_params": audio_params,
+            "additions": json.dumps(additions, ensure_ascii=False),
+        }
+        if model:
+            req_params["model"] = model
         if pitch:
             req_params["post_process"] = {"pitch": pitch}
         await start_session(ws, _payload(EventType.StartSession, req_params), session_id)

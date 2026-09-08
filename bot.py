@@ -129,7 +129,7 @@ REPLY_TOOL = [{
     },
 }]
 
-# 情绪 → seed-tts-2.0 语音指令（context_texts）。实测 vv 音色靠自然语言指令驱动情绪，
+# 情绪 → seed-tts-2.0 语音指令。指令可走 additions.context_texts（官方字段，不计费），
 # 外部数值参数（pitch/speech_rate/loudness）反而会干扰模型自己的演绎，全部弃用
 EMOTIONS = {
     "撒娇": "用撒娇、软软糯糯、甜腻的语气说",
@@ -143,9 +143,9 @@ EMOTIONS = {
 
 
 def tts_params_for(emotion: str, voice_hint: str = "", quote: str = "") -> dict:
-    """语音指令内联在合成文本前（[#指令] 语法，官网实测唯一有效形式；context_texts 无效）。
+    """语音指令内联在合成文本前（[#指令] 语法）；引用上文走 additions.context_texts。
     注意：只有"指令"能内联——用户原话内联会被念出来（实测），引用上文只能放 context_texts。
-    内联指令计入计费字符数。"""
+    内联指令计入计费字符数，context_texts 不计费。"""
     instruction = "；".join(c for c in (EMOTIONS.get(emotion, ""), voice_hint.strip()) if c)
     return {
         "inline": [instruction] if instruction else [],

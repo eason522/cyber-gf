@@ -55,7 +55,7 @@ pkill -f "[b]ot.py"                                # 停止（必须带 [b]，�
 ## 关键约定与坑
 
 - **密钥**：只放 `config.env` 和 `~/.openviking/ov.conf`，都在 gitignore。提交前确认 `git status` 不含 config.env。
-- **情绪系统**：LLM 通过 `reply` 工具调用交出 `{emotion, voice?, text}`，emotion 字段在 schema 里排前面（流式时先到）。情绪表达靠**内联语音指令**：`tts_params_for` 把 EMOTIONS 情绪指令 + voice 演绎指令合并，由 `tts_seed.synth(inline=[...])` 以 `[#指令]` 语法拼在合成文本前（模型只解析不朗读）。**实测结论**：`context_texts` 参数对指令无效（standard/expressive 子版本都一样，官网页面的指令就是内联进文本的）；用户原话**不能**内联（会被念出来），引用上文只能放 context_texts。音色 `zh_female_vv_uranus_bigtts`；`DOUBAO_CONTEXT` 留空，不加"台湾腔"等基底设定。
+- **情绪系统**：LLM 通过 `reply` 工具调用交出 `{emotion, voice?, text}`，emotion 字段在 schema 里排前面（流式时先到）。情绪表达靠**语音指令**：指令内联（`tts_params_for` 合并 EMOTIONS 情绪指令 + voice 演绎指令，由 `tts_seed.synth(inline=[...])` 以 `[#指令]` 语法拼在合成文本前）；引用上文走 `additions.context_texts`（官方字段是 **additions JSON 字符串里的 `context_texts`**，放 `req_params` 顶层会被静默忽略——这是早前实测"context_texts 无效"的根因；context_texts 不计费）。用户原话**不能**内联（会被念出来），引用上文只能放 context_texts。音色 `zh_female_vv_uranus_bigtts`；`DOUBAO_CONTEXT` 留空，不加"台湾腔"等基底设定。TTS 效果对照测试：`test_tts_official.py`（官方示例指令+文本直出，对照 `参考文档音频/*.wav`）。
 - **深度路由**：裁判模型用硅基流动 Qwen3-8B（关思考）。**不要用 seed-character 当裁判**——角色扮演模型做不了元分类，实测全判 CHAT。`reasoning_effort: high` 必须同时显式 `thinking: enabled`，否则 400。
 - **seed-tts**：文本放 `req_params.text` 经 TaskRequest 事件发送；payload 必须带 `user`/`event` 字段。
 - **OV 繁忙**：commit 提炼会占住 OV 服务器导致 recall 超时，这是预期行为（降级跳过，不阻塞回复）；频繁出现再考虑调队列。
