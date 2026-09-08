@@ -296,7 +296,7 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
                     yield ("voice", voice_seen)
             decoded = _extract_stream_text(raw) if raw else plain
             parts = SENT_SPLIT.split(decoded)
-            complete = [p.strip() for p in parts[:-1] if p.strip()]
+            complete = [p.strip() for p in parts[:-1] if _speakable(p)]
             while emitted < len(complete):
                 yield ("sentence", complete[emitted])
                 emitted += 1
@@ -319,7 +319,7 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
         emotion = "平静"
     # 冲刷剩余文本
     decoded = _extract_stream_text(raw) if raw else plain
-    rest = [p.strip() for p in SENT_SPLIT.split(decoded) if p.strip()]
+    rest = [p.strip() for p in SENT_SPLIT.split(decoded) if _speakable(p)]
     while emitted < len(rest):
         yield ("sentence", rest[emitted])
         emitted += 1
@@ -418,9 +418,17 @@ async def asr_transcribe(path: str | None = None, url: str | None = None,
 
 
 SENT_SPLIT = re.compile(r"(?<=[。！？!?；;~…\n])")
+SPEAKABLE = re.compile(r"[0-9A-Za-z一-鿿]")
+
+
+def _speakable(s: str) -> bool:
+    """分句碎片里要有真实文字才值得合成——纯标点（如省略号"…"被独立切出）TTS 会返回空音频。"""
+    return bool(s.strip()) and bool(SPEAKABLE.search(s))
 
 
 async def _safe_ogg(sentence: str, tts_params: dict) -> Path | None:
+    if not _speakable(sentence):
+        return None
     try:
         return await tts_to_ogg(sentence, tts_params)
     except Exception:
