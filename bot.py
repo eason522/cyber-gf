@@ -130,21 +130,22 @@ REPLY_TOOL = [{
 }]
 
 EMOTIONS = {
-    "撒娇": {"context": "用撒娇、软软的语气说话", "speech_rate": -8, "pitch": 3, "loudness": -5},
-    "温柔": {"context": "用温柔、轻声的语气说话", "speech_rate": -10, "pitch": 1, "loudness": -10},
-    "开心": {"context": "用开心、轻快的语气说话", "speech_rate": 12, "pitch": 4, "loudness": 5},
-    "难过": {"context": "用难过、委屈的语气说话", "speech_rate": -15, "pitch": -4, "loudness": -10},
-    "生气": {"context": "用有点生气、闹别扭的语气说话", "speech_rate": 15, "pitch": 3, "loudness": 10},
-    "害羞": {"context": "用害羞、轻声细语的语气说话", "speech_rate": -5, "pitch": 2, "loudness": -15},
+    "撒娇": {"context": "用特别撒娇、软软糯糯的语气说话", "speech_rate": -10, "pitch": 4, "loudness": -8},
+    "温柔": {"context": "用特别温柔、轻声的语气说话", "speech_rate": -12, "pitch": 1, "loudness": -15},
+    "开心": {"context": "用特别开心、轻快雀跃的语气说话", "speech_rate": 15, "pitch": 6, "loudness": 8},
+    "难过": {"context": "用非常难过、委屈巴巴的语气说话", "speech_rate": -20, "pitch": -6, "loudness": -15},
+    "生气": {"context": "用非常生气、凶巴巴闹别扭的语气说话", "speech_rate": 20, "pitch": 6, "loudness": 15},
+    "害羞": {"context": "用非常害羞、轻声细语的语气说话", "speech_rate": -8, "pitch": 3, "loudness": -20},
     "平静": {"context": "", "speech_rate": 0, "pitch": 0, "loudness": 0},
 }
 
-# 演绎提示 → 硬参数微调（叠在情绪参数上），保证耳语这类演绎真的轻下来
+# 演绎提示 → 硬参数微调（叠在情绪参数上）。实测 loudness -25 仅轻 2.4dB 几乎无感，
+# 耳语级别需要 -45（约轻 6dB）
 VOICE_HINT_RULES = [
-    (("耳语", "悄悄", "气声", "轻声"), {"loudness": -25, "speech_rate": -8}),
-    (("喊", "大叫", "大声"), {"loudness": 15, "speech_rate": 10}),
-    (("哭腔", "哽咽", "哭着"), {"loudness": -10, "speech_rate": -12}),
-    (("慵懒", "拖着尾音", "困倦"), {"loudness": -10, "speech_rate": -15}),
+    (("耳语", "悄悄", "气声", "轻声"), {"loudness": -45, "speech_rate": -10, "pitch": -2}),
+    (("喊", "大叫", "大声"), {"loudness": 25, "speech_rate": 15, "pitch": 3}),
+    (("哭腔", "哽咽", "哭着"), {"loudness": -5, "speech_rate": -10, "pitch": -3}),
+    (("慵懒", "拖着尾音", "困倦"), {"loudness": -15, "speech_rate": -18, "pitch": -2}),
 ]
 
 
@@ -459,7 +460,7 @@ async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_t
         stop.set()
         await update.message.reply_text("嗚…人家剛剛恍神了啦，你再說一次好不好齁🥺")
         return
-    log.info("llm stream done in %.1fs, %d sentences, emotion=%s", time.time() - t0, len(tasks), emotion)
+    log.info("llm stream done in %.1fs, %d sentences, emotion=%s voice=%s", time.time() - t0, len(tasks), emotion, voice_hint or "-")
 
     oggs = await asyncio.gather(*tasks)
     stop.set()

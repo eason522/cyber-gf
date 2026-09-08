@@ -74,7 +74,7 @@ async def process_message(message: discord.Message, user_text: str,
         keepalive.cancel()
         await channel.send("嗚…人家剛剛恍神了啦，你再說一次好不好齁🥺")
         return
-    log.info("llm stream done in %.1fs, %d sentences, emotion=%s", time.time() - t0, len(tasks), emotion)
+    log.info("llm stream done in %.1fs, %d sentences, emotion=%s voice=%s", time.time() - t0, len(tasks), emotion, voice_hint or "-")
 
     oggs = await asyncio.gather(*tasks)
     stop.set()
