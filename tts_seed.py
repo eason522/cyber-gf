@@ -55,7 +55,7 @@ async def synth(
     out_mp3: Path,
     *,
     context: "str | list[str]" = "",
-    inline: "list[str] | None" = None,
+    voice: str = "",
     speech_rate: int = 0,
     loudness: int = 0,
     pitch: int = 0,
@@ -64,13 +64,14 @@ async def synth(
     """豆包 seed-tts-2.0 双向流式合成（一次性整段文本）。失败抛异常，由调用方回退。
 
     context：语音指令/引用上文，走官方 additions.context_texts（JSON 字符串里的字段，
-    不参与计费、不会被朗读；放 req_params 顶层会被服务端静默忽略——这是之前实测
-    "context_texts 无效"的根因）。
-    inline：[#指令] 语法拼在 text 前面（官网体验页示例的形式），指令内容不计费但
-    引用上文内联会被念出来，引用上文请走 context。
+    不参与计费、不会被朗读；放 req_params 顶层会被服务端静默忽略）。
+    指令必须写成纯粹的"声音描写"（用……的语气/哭腔说），对话式互动指令（"撩撩我"
+    "你得跟我互怼"）会失效。[#指令] 内联语法 API 不认识，会被念出来，已废弃。
+    voice：留空用 DOUBAO_VOICE 环境变量。
     """
     key = os.environ["DOUBAO_API_KEY"]
-    voice = os.getenv("DOUBAO_VOICE", "zh_female_xiaohe_uranus_bigtts")
+    if not voice:
+        voice = os.getenv("DOUBAO_VOICE", "zh_female_xiaohe_uranus_bigtts")
     base_ctx = os.getenv("DOUBAO_CONTEXT", "").strip()
     if not model:
         model = os.getenv("DOUBAO_TTS_MODEL", "")  # 默认 standard 子版本，官网页面同款
@@ -110,8 +111,6 @@ async def synth(
         await start_session(ws, _payload(EventType.StartSession, req_params), session_id)
         await _wait_event(ws, EventType.SessionStarted)
 
-        if inline:
-            text = "".join(f"[#{c}]" for c in inline if c) + text
         await task_request(ws, _payload(EventType.TaskRequest, {"text": text}), session_id)
         await finish_session(ws, session_id)
 

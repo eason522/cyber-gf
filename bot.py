@@ -129,28 +129,38 @@ REPLY_TOOL = [{
     },
 }]
 
-# 情绪 → seed-tts-2.0 语音指令。指令可走 additions.context_texts（官方字段，不计费），
-# 外部数值参数（pitch/speech_rate/loudness）反而会干扰模型自己的演绎，全部弃用
+# 情绪 → seed-tts-2.0 语音指令（additions.context_texts，官方字段，不计费不朗读）。
+# 指令必须是纯"声音描写"（用……的语气说），对话式互动指令实测失效；
+# 生气这条是官网对照实验验证过的措辞。外部数值参数（pitch/speech_rate/loudness）
+# 会干扰模型自己的演绎，全部弃用
 EMOTIONS = {
     "撒娇": "用撒娇、软软糯糯、甜腻的语气说",
     "温柔": "用温柔、轻声、宠溺的语气说",
     "开心": "用开心、轻快、雀跃的语气说",
     "难过": "用难过、委屈、带着点哭腔的语气说",
-    "生气": "用生气、闹别扭、凶巴巴的语气说",
+    "生气": "用非常生气、像在吵架一样凶巴巴的语气说",
     "害羞": "用害羞、犹豫、轻声细语的语气说",
     "平静": "",
 }
 
+# 悄悄话/耳语/气声类演绎：实测小和音色情绪表现力弱于 vv，故命中 voice 提示关键词时
+# 切 vv 音色 + 官网对照验证过的纯气声指令；其余都用默认音色小和（自带台湾腔）
+WHISPER_KEYWORDS = ("耳语", "悄悄话", "气声", "asmr")
+WHISPER_VOICE = "zh_female_vv_uranus_bigtts"
+WHISPER_INSTRUCTION = ("全程用纯气声耳语：声带完全不震动、没有一点真声和音调起伏，"
+                       "只有气流摩擦的沙沙声，放慢语速、贴着耳朵轻轻地说")
+
 
 def tts_params_for(emotion: str, voice_hint: str = "", quote: str = "") -> dict:
-    """语音指令内联在合成文本前（[#指令] 语法）；引用上文走 additions.context_texts。
-    注意：只有"指令"能内联——用户原话内联会被念出来（实测），引用上文只能放 context_texts。
-    内联指令计入计费字符数，context_texts 不计费。"""
-    instruction = "；".join(c for c in (EMOTIONS.get(emotion, ""), voice_hint.strip()) if c)
-    return {
-        "inline": [instruction] if instruction else [],
-        "context": [quote] if quote else [],
-    }
+    """语音指令和引用上文都走 additions.context_texts（指令必须纯声音描写，见上）。
+    用户原话只能作为引用上文放 context，绝不拼进合成文本（会被念出来）。"""
+    hint = voice_hint.strip()
+    if any(k in hint.lower() for k in WHISPER_KEYWORDS):
+        ctx = [WHISPER_INSTRUCTION] + ([quote] if quote else [])
+        return {"context": ctx, "voice": WHISPER_VOICE}
+    instruction = "；".join(c for c in (EMOTIONS.get(emotion, ""), hint) if c)
+    ctx = ([instruction] if instruction else []) + ([quote] if quote else [])
+    return {"context": ctx}
 
 # 深度路由：明显日常的短消息走快速通道，拿不准的问裁判模型
 DEEP_KEYWORDS = ("爱", "想你", "思念", "难过", "伤心", "哭", "emo", "分手", "纪念日",
