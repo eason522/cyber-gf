@@ -58,14 +58,19 @@ async def synth(
     speech_rate: int = 0,
     loudness: int = 0,
     pitch: int = 0,
+    model: str = "",
 ) -> None:
     """豆包 seed-tts-2.0 双向流式合成（一次性整段文本）。失败抛异常，由调用方回退。
 
     context 可传字符串或列表（引用上文/情绪指令/演绎指令多条），均只作语境不合成。
+    model 默认 seed-tts-2.0-expressive：standard 版会丢弃语音指令/标签（官方文档明确），
+    只有 expressive 版才支持情绪演绎。
     """
     key = os.environ["DOUBAO_API_KEY"]
     voice = os.getenv("DOUBAO_VOICE", "zh_female_xiaohe_uranus_bigtts")
     base_ctx = os.getenv("DOUBAO_CONTEXT", "").strip()
+    if not model:
+        model = os.getenv("DOUBAO_TTS_MODEL", "seed-tts-2.0-expressive")
     headers = {"X-Api-Key": key, "X-Api-Resource-Id": "seed-tts-2.0"}
     audio = bytearray()
     async with websockets.connect(URL, additional_headers=headers, max_size=16 * 1024 * 1024) as ws:
@@ -87,6 +92,8 @@ async def synth(
                 "max_length_to_filter_parenthesis": 100,
             }),
         }
+        if model:
+            req_params["model"] = model
         if isinstance(context, str):
             ctx_list = [context.strip()] if context.strip() else []
         else:

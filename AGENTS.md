@@ -55,7 +55,7 @@ pkill -f "[b]ot.py"                                # 停止（必须带 [b]，�
 ## 关键约定与坑
 
 - **密钥**：只放 `config.env` 和 `~/.openviking/ov.conf`，都在 gitignore。提交前确认 `git status` 不含 config.env。
-- **情绪系统**：LLM 通过 `reply` 工具调用交出 `{emotion, voice?, text}`，emotion 字段在 schema 里排前面（流式时先到）。情绪表达**全靠语音指令**（context_texts 自然语言）驱动，不用 pitch/speech_rate/loudness 外部参数（官网实测默认最好，数值参数反而干扰模型演绎）。context_texts 组装顺序（`tts_params_for`）：引用上文（用户原话，只引用不合成）→ EMOTIONS 情绪指令 → voice 演绎指令。音色用 `zh_female_vv_uranus_bigtts`（vv 音色表现力远强于 xiaohe）；`DOUBAO_CONTEXT` 留空，**不要加"台湾腔"之类的音色基底设定**，会干扰模型情绪判断。
+- **情绪系统**：LLM 通过 `reply` 工具调用交出 `{emotion, voice?, text}`，emotion 字段在 schema 里排前面（流式时先到）。情绪表达**全靠语音指令**（context_texts 自然语言）驱动，不用 pitch/speech_rate/loudness 外部参数。context_texts 组装顺序（`tts_params_for`）：引用上文（用户原话，只引用不合成）→ EMOTIONS 情绪指令 → voice 演绎指令。音色用 `zh_female_vv_uranus_bigtts`；`DOUBAO_CONTEXT` 留空，**不要加"台湾腔"之类的音色基底设定**，会干扰模型情绪判断。**关键：必须用 `seed-tts-2.0-expressive` 模型**（DOUBAO_TTS_MODEL），默认的 standard 版会静默丢弃全部语音指令/标签（[官方文档](https://www.volcengine.com/docs/6561/1329505)），之前"指令无效/语境稀释"的排查全是这个引起的。
 - **深度路由**：裁判模型用硅基流动 Qwen3-8B（关思考）。**不要用 seed-character 当裁判**——角色扮演模型做不了元分类，实测全判 CHAT。`reasoning_effort: high` 必须同时显式 `thinking: enabled`，否则 400。
 - **seed-tts**：文本放 `req_params.text` 经 TaskRequest 事件发送；payload 必须带 `user`/`event` 字段。
 - **OV 繁忙**：commit 提炼会占住 OV 服务器导致 recall 超时，这是预期行为（降级跳过，不阻塞回复）；频繁出现再考虑调队列。
