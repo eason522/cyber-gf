@@ -42,10 +42,15 @@ async def _keepalive_typing(channel, stop: asyncio.Event) -> None:
             pass
 
 
-async def _set_recalling(on: bool) -> None:
-    """回忆期间把 bot 的自定义状态切成"正在回忆…"（成员列表/资料卡可见）。"""
+STATUS_TEXT = {"recall": "正在回忆…", "surf": "正在刷小红书…"}
+
+
+async def _set_status(status: str) -> None:
+    """按 chat_stream 的状态事件切换 bot 自定义状态（成员列表/资料卡可见），空串清除。"""
     try:
-        await client.change_presence(activity=discord.CustomActivity(name="正在回忆…") if on else None)
+        await client.change_presence(
+            activity=discord.CustomActivity(name=STATUS_TEXT[status]) if status else None
+        )
     except Exception:
         pass
 
@@ -77,7 +82,7 @@ async def process_message(message: discord.Message, user_text: str,
                 voice_hint = ev[1]
                 whisper = bot.is_whisper(voice_hint)
             elif ev[0] == "status":
-                await _set_recalling(bool(ev[1]))
+                await _set_status(ev[1])
             elif ev[0] == "sentence":
                 if whisper:
                     continue  # 悄悄话攒整段（分句合成气声会逐句漂移）
@@ -96,10 +101,10 @@ async def process_message(message: discord.Message, user_text: str,
         log.exception("llm failed")
         stop.set()
         keepalive.cancel()
-        await _set_recalling(False)
+        await _set_status("")
         await channel.send("嗚…人家剛剛恍神了啦，你再說一次好不好齁🥺")
         return
-    await _set_recalling(False)
+    await _set_status("")
     if not split and full_reply:
         tasks.append(asyncio.create_task(bot._safe_ogg(full_reply, bot.tts_params_for(emotion, voice_hint))))
     log.info("llm stream done in %.1fs, %d sentences, emotion=%s voice=%s split=%s", time.time() - t0, len(tasks), emotion, voice_hint or "-", split)
@@ -178,6 +183,7 @@ async def _dc_send(chat_id: int, text: str, ogg: Path | None) -> None:
 async def on_ready():
     log.info("bot started (discord), user=%s", client.user)
     asyncio.create_task(bot.heartbeat_loop(_dc_send))
+    asyncio.create_task(bot.surf_loop())
 
 
 def run() -> None:

@@ -36,7 +36,7 @@ OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启）
   ├─ judge_depth        深度路由：闲聊 minimal(关思考) / 走心 high(开思考)
   ├─ chat_stream        seed-character 流式 + 工具调用循环（gf_tools：时间/Tavily搜索/文件读写 → reply 收尾，emotion 先行）
   └─ seed-tts-2.0       ≤350字(或悄悄话)整段一次合成，超长才按句并行；情绪→语气指令，语音先发文字后到
-每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆；心跳每 45 分钟主动关心（NO_REPLY 契约；不想打扰时可写小本本 tinynote/，心跳判定用北京时间）
+每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆；心跳每 45 分钟主动关心（NO_REPLY 契约；不想打扰时可写小本本 tinynote/，心跳判定用北京时间）；冲浪循环每 3 小时（`SURF_MINUTES`）让她自己上网刷八卦/新闻，新发现写进 tinynote/ 自我维护，聊天时小本本近况注入 system（`_tinynote_block`），她会主动分享；聊天中触发 web_search 时 Discord 状态显示「正在刷小红书…」（recall 时显示「正在回忆…」）
 ```
 
 ## 文件职责（改哪里）

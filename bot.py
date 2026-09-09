@@ -366,6 +366,34 @@ CAPABILITY_NOTE = (
 )
 MAX_TOOL_ROUNDS = 4
 
+TINYNOTE_DIR = Path(__file__).parent / "tinynote"
+
+
+def _tinynote_block(max_chars: int = 800) -> str:
+    """她小本本里最近写的内容（按修改时间取最新几篇），注入聊天上下文，让她能主动分享自己的新发现。"""
+    try:
+        files = sorted(
+            (f for f in TINYNOTE_DIR.iterdir() if f.is_file()),
+            key=lambda f: f.stat().st_mtime, reverse=True,
+        )
+    except Exception:
+        return ""
+    out: list[str] = []
+    total = 0
+    for f in files:
+        try:
+            txt = f.read_text(encoding="utf-8", errors="ignore").strip()
+        except Exception:
+            continue
+        if not txt:
+            continue
+        chunk = txt[: max_chars - total]
+        out.append(f"◆ {f.name}\n{chunk}")
+        total += len(chunk)
+        if total >= max_chars:
+            break
+    return "\n\n".join(out)
+
 
 async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | None = None):
     """流式回复生成器：依次产出 ("emotion", e) / ("sentence", s)，最后 ("done", reply, emotion)。
@@ -390,6 +418,9 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
     else:
         mem_block = ""
     system = soul.build_system(mem_block) + CAPABILITY_NOTE
+    notes = _tinynote_block()
+    if notes:
+        system += "\n\n# 她的小本本近况（她自己写的日记/冲浪笔记，聊天时可以自然地分享里面的新发现）\n\n" + notes
     if effort == "high":
         system += (
             "\n\n（走心時刻：他這句話觸動了你心底最軟的地方。現在拋開平常發短訊息的習慣，"
@@ -411,6 +442,8 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
         if not tool_calls:
             break
         log.info("tool round %d: %s", round_no, [(t["name"], t["args"]) for t in tool_calls])
+        if any(t["name"] == "web_search" for t in tool_calls):
+            yield ("status", "surf")  # 平台层可借此显示"正在刷小红书"
         msgs.append({
             "role": "assistant",
             "tool_calls": [{
@@ -421,6 +454,7 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
         for t in tool_calls:
             out = "（先别急着回复，把工具结果用上再说）" if t["name"] == "reply" else await gf_tools.run(t["name"], t["args"])
             msgs.append({"role": "tool", "tool_call_id": t["id"], "content": out})
+        yield ("status", "")
     reply = result["reply"]
     emotion = result["emotion"]
     log.info("reply (%s): %s", emotion, reply[:150])
@@ -738,6 +772,64 @@ async def heartbeat_loop(send) -> None:
             await asyncio.sleep(HEARTBEAT_MINUTES * 60)
 
 
+# 冲浪：空闲时她自己上网刷新闻/八卦，新发现写进小本本
+SURF_MINUTES = int(os.getenv("SURF_MINUTES", "180"))
+SURF_PROMPT = (
+    "（系统提示：现在是空闲时间，你可以自己上网上冲浪啦。"
+    "看看你最近在追的明星、在嗑的八卦有什么新动态，或者去发现点新的好玩的东西——"
+    "娱乐新闻、社会热点都可以。先用 list_directory / read_file 翻翻小本本里你之前记过什么，"
+    "再用 web_search 搜新内容，值得记住的用 write_file 写进小本本 ~/cyber-gf/tinynote/"
+    "（可以自己维护一个冲浪笔记文件，比如最近追的星、在关注的事）。"
+    "如果没什么想看的，就只回复 NO_SURF。）"
+)
+
+
+async def _surf_once() -> None:
+    """一轮冲浪：翻小本本 → 搜索 → 记录，最多 6 轮工具调用。全程静默，不打扰他。"""
+    system = soul.build_system("")
+    msgs = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": SURF_PROMPT},
+    ]
+    for i in range(6):
+        resp = await llm.chat.completions.create(
+            model=LLM_MODEL, messages=msgs, tools=gf_tools.TOOL_DEFS, tool_choice="auto",
+        )
+        m = resp.choices[0].message
+        if not m.tool_calls:
+            log.info("surf: done (%s)", (m.content or "")[:40])
+            return
+        msgs.append({
+            "role": "assistant",
+            "tool_calls": [{"id": c.id, "type": "function",
+                            "function": {"name": c.function.name, "arguments": c.function.arguments}}
+                           for c in m.tool_calls],
+        })
+        for c in m.tool_calls:
+            try:
+                targs = json.loads(c.function.arguments or "{}")
+            except json.JSONDecodeError:
+                targs = {}
+            out = await gf_tools.run(c.function.name, targs)
+            log.info("surf tool: %s(%s) -> %s", c.function.name,
+                     {k: str(v)[:30] for k, v in targs.items()}, out[:60])
+            msgs.append({"role": "tool", "tool_call_id": c.id, "content": out})
+
+
+async def surf_loop() -> None:
+    """空闲冲浪循环：白天每隔 SURF_MINUTES 分钟让她自己上网刷刷，新发现写进小本本。"""
+    await asyncio.sleep(300)  # 启动后先等五分钟
+    while True:
+        try:
+            hour = datetime.now(ZoneInfo("Asia/Shanghai")).hour
+            if ACTIVE_HOURS[0] <= hour < ACTIVE_HOURS[1]:
+                await _surf_once()
+        except Exception:
+            log.exception("surf error")
+        finally:
+            await asyncio.sleep(SURF_MINUTES * 60)
+
+
 async def _post_init(app: Application) -> None:
     # 过滤 httpcore2 在 Python 3.14 下关闭流式响应时的已知噪音
     def _exc_filter(loop, context):
@@ -753,6 +845,7 @@ async def _post_init(app: Application) -> None:
             await app.bot.send_voice(chat_id, voice=ogg.read_bytes())
 
     asyncio.create_task(heartbeat_loop(tg_send))
+    asyncio.create_task(surf_loop())
 
 
 def run_telegram() -> None:
