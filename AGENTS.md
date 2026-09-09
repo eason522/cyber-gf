@@ -48,6 +48,7 @@ OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启）
 | `soul/USER.md` | 用户画像（指令式条目，带 observed/status 元数据） |
 | `bot.py` | 核心流水线 + Telegram 接入：平台分发（main→run_telegram/discord_bot.run）、深度路由、工具调用循环（_stream_once 单轮流式 + chat_stream 外层最多4轮工具循环，末轮强制 reply）、TTS 参数映射（EMOTIONS 表）、心跳（heartbeat_loop 接收平台 send 回调） |
 | `gf_tools.py` | 暖暖的工具箱：get_current_time（北京时间）/ web_search（Tavily，`TAVILY_API_KEY`）/ list_directory / read_file / write_file。文件操作限制在 /home/eason 下，拒绝 config.env/.ssh/.git 等敏感路径；工具出错只返回错误字符串 |
+| `tinynote/` | 暖暖的私人小本本（日记/涂鸦），她自己用 write_file 写、read_file 翻看，SOUL.md 里有设定；已 gitignore（她的私人内容不进仓库） |
 | `discord_bot.py` | Discord 接入层：私信或 @机器人 触发，复用 bot.py 的 chat_stream/TTS/心跳；语音以 ogg 音频附件发送（Discord 机器人不能发原生语音条），收语音靠音频附件 |
 | `ov_memory.py` | OpenViking 封装：recall / record_turn(commit) / healthy |
 | `memory.py` | 本地兜底记忆（OV 不可用时）+ 历史持久化（`data/<uid>.json`） |

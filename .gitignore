@@ -6,3 +6,4 @@ ffmpeg
 config.env
 *.mp3
 get-pip.py
+tinynote/
