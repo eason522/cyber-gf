@@ -294,11 +294,13 @@ class ChatService:
         except Exception:
             pass
 
-    async def process(self, user_id: int, user_text: str, ui) -> None:
+    async def process(self, user_id: int, user_text: str, ui,
+                      recall_task: asyncio.Task | None = None) -> None:
         """共享的消息处理流水线（原 bot.py / discord_bot.py 两份 process_message 的合并）。
 
         语音优先：回复不超过 WHOLE_TTS_MAX 字（或悄悄话场景）攒整段一次合成，
         保住省略号等情绪细节且语气一致；超长回复才按句并行合成抢速度。语音按序先发，文字最后到。
+        recall_task：语音场景下平台层与 ASR 并行的预检索任务，透传给 stream()。
 
         ui 是平台提供的回调对象，协议：
         - async send_text(text: str)：发文字（完整回复 / 出错提示）
@@ -319,7 +321,7 @@ class ChatService:
         full_reply = ""
         t0 = time.time()
         try:
-            async for ev in self.stream(user_id, user_text):
+            async for ev in self.stream(user_id, user_text, recall_task=recall_task):
                 if ev[0] == "emotion":
                     emotion = ev[1]
                 elif ev[0] == "voice":

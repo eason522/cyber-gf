@@ -49,6 +49,9 @@ class Config:
     ov_peer_id: str            # OV_PEER_ID
     ov_recall_top_k: int       # OV_RECALL_TOP_K
     ov_recall_timeout: float   # OV_RECALL_TIMEOUT
+    # 插件开关（core/app.py，逗号分隔插件模块短名）
+    plugins_disabled: str      # PLUGINS_DISABLED（从默认插件树剔除，不允许剔除被依赖的）
+    plugins_extra: str         # PLUGINS_EXTRA（追加加载）
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -81,4 +84,6 @@ class Config:
             ov_peer_id=env.get("OV_PEER_ID", "boyfriend"),
             ov_recall_top_k=int(env.get("OV_RECALL_TOP_K", "5")),
             ov_recall_timeout=float(env.get("OV_RECALL_TIMEOUT", "30")),
+            plugins_disabled=env.get("PLUGINS_DISABLED", ""),
+            plugins_extra=env.get("PLUGINS_EXTRA", ""),
         )

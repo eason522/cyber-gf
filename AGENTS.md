@@ -10,7 +10,7 @@
 
 - 服务器：2核4G 低配，无 sudo。Python 3.14（系统无 ensurepip，建虚拟环境用 `python3 -m virtualenv`，不要用 `python3 -m venv`）
 - ffmpeg 是项目根目录下的静态二进制（`./ffmpeg`），不是系统安装
-- 网络走代理；本地服务（OpenViking）必须走 `NO_PROXY`，否则慢好几秒；**Discord 的 aiohttp 不读代理环境变量**，discord_bot.py 里已显式传 `proxy=`
+- 网络走代理；本地服务（OpenViking）必须走 `NO_PROXY`，否则慢好几秒；**Discord 的 aiohttp 不读代理环境变量**，platform_discord.py 里已显式传 `proxy=`
 - 无 GPU；ASR 已改走云端（方舟音频理解，`ASR_MODEL` 控制，ogg 需先转 mp3——`input_audio` 不吃 ogg），本地 whisper 只做兜底
 - **主模型 doubao-seed-character 不支持音频输入**（实测 400 "audio input is not supported"），别再把用户语音直接喂给它；seed-tts-2.0 也只进文本（纯 TTS 接口）
 - 无 GPU，本地 ASR 兜底用 faster-whisper base 跑 CPU（平常走云端）
@@ -29,15 +29,41 @@ OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启）
 
 ## 架构
 
+cordis 风格插件架构：core 只提供服务容器/事件总线/生命周期，业务能力全部是插件。
+
 ```
-消息(文字/语音) → bot.py
-  ├─ asr_transcribe     语音入口三级降级：seedasr.auc 录音识别2.0(URL直传,方言/情绪标签) → 方舟 doubao-seed-2-0-mini 音频理解(本地文件base64) → 本地 whisper
-  ├─ ov_memory.recall   OpenViking 语义检索（peer 空间优先，30s 超时降级；期间 Discord 状态显示"正在回忆…"）
-  ├─ judge_depth        深度路由：闲聊 minimal(关思考) / 走心 high(开思考)
-  ├─ chat_stream        seed-character 流式 + 工具调用循环（gf_tools：时间/Tavily搜索/文件读写 → reply 收尾，emotion 先行）
-  └─ seed-tts-2.0       ≤350字(或悄悄话)整段一次合成，超长才按句并行；情绪→语气指令，语音先发文字后到
-每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆；心跳每 45 分钟主动关心（NO_REPLY 契约；不想打扰时可写小本本 tinynote/，心跳判定用北京时间）；冲浪循环每 3 小时（`SURF_MINUTES`）让她自己上网刷八卦/新闻，新发现写进 tinynote/ 自我维护，聊天时小本本近况注入 system（`_tinynote_block`），她会主动分享；聊天中触发 web_search 时 Discord 状态显示「正在刷小红书…」（recall 时显示「正在回忆…」）
+core/app.py 入口：Config.from_env() → root Context → 按依赖序加载插件树 → emit "ready"
+  → 平台插件在此刻启动轮询/连接 → 阻塞等待，退出时 ctx.dispose() 逆序回收
+core/context.py：Context = provide/inject（沿 parent 链查找）+ on/emit 事件总线
+  + on_dispose/create_task/load_plugin/dispose（插件与后台任务统一回收）+ fork（千人千面预留）
+插件约定：plugins/foo.py 导出 apply(ctx)（可选 dispose(ctx)），顶部声明 requires/provides
+插件树开关：PLUGINS_DISABLED / PLUGINS_EXTRA（逗号分隔模块短名；剔除被依赖的插件会在
+  启动时报错并指明缺失的服务）
 ```
+
+消息链路（平台无关核心在 chat 插件）：
+
+```
+消息(文字/语音) → platform_telegram / platform_discord
+  ├─ asr.transcribe     语音三级降级：seedasr.auc 录音识别2.0(URL直传,方言/情绪标签) → 方舟 doubao-seed-2-0-mini 音频理解(本地文件base64) → 本地 whisper
+  └─ chat.process(user_id, text, ui)   ui 协议：send_text / send_voice(ogg_path) / status(kind) / pulse(kind)
+       ├─ memory.recall      OpenViking 语义检索（peer 空间优先，30s 超时降级；期间 Discord 状态显示"正在回忆…"）
+       ├─ depth.judge        深度路由：闲聊 minimal(关思考) / 走心 high(开思考)
+       ├─ chat.stream        seed-character 流式 + 工具调用循环（tools：时间/Tavily搜索/文件读写 → reply 收尾，emotion 先行）
+       │                     事件流：("status")/("emotion")/("voice")/("sentence")/("done")；emit message.received / reply.done
+       └─ tts（seed-tts-2.0 → edge-tts 降级）  ≤350字(或悄悄话)整段一次合成，超长才按句并行；语音先发文字后到
+heartbeat 插件：每 45 分钟主动关心（NO_REPLY 契约；可写小本本 tinynote/；北京时间判定；
+  发消息走 ctx.inject("platform").send(chat_id, text, ogg)，无平台服务时记 warning 跳过）
+surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻写进 tinynote/，聊天时小本本近况
+  注入 system（persona.tinynote_block），她会主动分享；web_search 时 Discord 状态显示「正在刷小红书…」
+每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆（memory.record_turn，OV 挂自动降级本地提炼）
+```
+
+## 加一个新插件
+
+1. 写 `plugins/foo.py`：顶部 `requires = ["chat", ...]`（服务名），导出 `def apply(ctx)`，在 apply 里 `ctx.provide("foo", svc)` 或 `ctx.create_task(后台循环)`；可选 `def dispose(ctx)`。
+2. 挂载：加进 `core/app.py` 的 `DEFAULT_PLUGINS`（注意依赖序），或临时用 `PLUGINS_EXTRA=foo`。
+3. 消费其他服务用 `ctx.inject("名字")`；跨插件通信用 `ctx.on/ctx.emit`；后台任务一律 `ctx.create_task`（dispose 自动取消）。
 
 ## 文件职责（改哪里）
 
@@ -46,13 +72,28 @@ OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启）
 | `soul/IDENTITY.md` | 她是谁：名字、存在形式、vibe、生日 |
 | `soul/SOUL.md` | 性格、说话风格、小世界、边界。改人设只动这里，每条消息实时加载，改完不用重启 |
 | `soul/USER.md` | 用户画像（指令式条目，带 observed/status 元数据） |
-| `bot.py` | 核心流水线 + Telegram 接入：平台分发（main→run_telegram/discord_bot.run）、深度路由、工具调用循环（_stream_once 单轮流式 + chat_stream 外层最多4轮工具循环，末轮强制 reply）、TTS 参数映射（EMOTIONS 表）、心跳（heartbeat_loop 接收平台 send 回调） |
-| `gf_tools.py` | 暖暖的工具箱：get_current_time（北京时间）/ web_search（Tavily，`TAVILY_API_KEY`）/ list_directory / read_file / write_file。文件操作限制在 /home/eason 下，拒绝 config.env/.ssh/.git 等敏感路径；工具出错只返回错误字符串 |
+| `core/app.py` | 入口：日志配置（按天轮转 14 天）、插件树解析（PLUGINS_DISABLED/EXTRA + 依赖静态校验）、按序加载、emit ready、阻塞与干净退出 |
+| `core/context.py` | Context：服务注册/注入、事件总线、插件生命周期、fork |
+| `core/config.py` | Config.from_env()：集中全部 env key（29 个），默认值与旧代码逐字一致 |
+| `plugins/llm.py` | 服务 llm：主模型 AsyncOpenAI 客户端单例 |
+| `plugins/persona.py` | 服务 persona：soul/*.md 系统提示（委托 soul.py）+ tinynote 近况块 |
+| `plugins/sessions.py` | 服务 sessions：会话内存态、`data/<uid>.json` 持久化（委托 memory.py）、contact.json 读写 |
+| `plugins/memory_local.py` | 服务 memory（本地兜底提供者）：定期 LLM 提炼 |
+| `plugins/memory_openviking.py` | 服务 memory（OpenViking 提供者，override 本地）：recall/record_turn，OV 挂自动降级 |
+| `plugins/asr.py` | 服务 asr：语音转文字三级降级链（委托 asr_seed.py，whisper 惰性单例兜底） |
+| `plugins/tts.py` | 服务 tts：seed-tts-2.0 → edge-tts 降级（委托 tts_seed.py）、EMOTIONS/音色映射、safe_ogg |
+| `plugins/tools_builtin.py` | 服务 tools：工具注册表 ToolRegistry（defs/register/run），内置时间/Tavily搜索/文件读写 5 个工具。文件操作限制在 /home/eason 下，拒绝 config.env/.ssh/.git 等敏感路径；工具出错只返回错误字符串 |
+| `plugins/depth_router.py` | 服务 depth：judge_depth（硅基流动 Qwen3-8B 关思考 + DEEP_KEYWORDS 快捷路径） |
+| `plugins/chat.py` | 服务 chat：核心流水线。stream() 事件流 + REPLY_TOOL schema + 工具调用循环（最多4轮、末轮强制 reply）；process() 统一 TG/Discord 的消息派发（攒句/整段≤350字/超长分句并行/语音先发文字后到） |
+| `plugins/heartbeat.py` | 后台任务：45 分钟心跳（NO_REPLY 契约、北京时间沉默判定、HEARTBEAT_TOOLS 可写小本本），platform 服务延迟 inject |
+| `plugins/surf.py` | 后台任务：3 小时冲浪循环，写 tinynote |
+| `plugins/platform_telegram.py` | 服务 platform（TG）：ptb 手动生命周期（initialize/start/updater.start_polling，"ready" 事件触发启动）；文字/语音入口；TelegramUI（pulse→RECORD_VOICE，status no-op） |
+| `plugins/platform_discord.py` | 服务 platform（Discord）：client.start(token) 手动生命周期；私信或 @机器人 触发；语音 ogg 附件收发；DiscordUI（status→"正在回忆…/正在刷小红书…"，pulse→typing） |
 | `tinynote/` | 暖暖的私人小本本（日记/涂鸦），她自己用 write_file 写、read_file 翻看，SOUL.md 里有设定；已 gitignore（她的私人内容不进仓库） |
-| `discord_bot.py` | Discord 接入层：私信或 @机器人 触发，复用 bot.py 的 chat_stream/TTS/心跳；语音以 ogg 音频附件发送（Discord 机器人不能发原生语音条），收语音靠音频附件 |
-| `ov_memory.py` | OpenViking 封装：recall / record_turn(commit) / healthy |
-| `memory.py` | 本地兜底记忆（OV 不可用时）+ 历史持久化（`data/<uid>.json`） |
-| `tts_seed.py` + `tts_protocols.py` | 豆包 seed-tts-2.0 WebSocket 双向流式协议实现 |
+| `ov_memory.py` | OpenViking 封装库：recall / record_turn(commit) / healthy |
+| `memory.py` | 本地兜底记忆库（OV 不可用时）+ 历史持久化 |
+| `soul.py` | 人设加载库（soul/*.md → system prompt） |
+| `tts_seed.py` + `tts_protocols.py` | 豆包 seed-tts-2.0 WebSocket 双向流式协议实现库 |
 | `asr_seed.py` | 豆包录音文件识别 2.0（volc.seedasr.auc）：提交+轮询，吃音频 URL（TG 文件链接/Discord CDN），返回文本+情绪/方言提示。**需在语音控制台开通该服务**，否则报 45000030；`ASR_SEED=0` 可关闭。openspeech 直连不走代理 |
 | `config.env` | 所有密钥和开关（已 gitignore，**绝不提交**） |
 | `参考文档音频/` | 方舟官方文档（thinking / seed-tts 协议 / 语音指令与标签 / seedasr 录音识别）+ 官网效果参考 wav（对照测试用） |
@@ -65,7 +106,7 @@ OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启）
 - **seed-tts**：文本放 `req_params.text` 经 TaskRequest 事件发送；payload 必须带 `user`/`event` 字段。
 - **OV 繁忙**：commit 提炼会占住 OV 服务器导致 recall 超时，这是预期行为（降级跳过，不阻塞回复）；频繁出现再考虑调队列。
 - 测试产生的 `data/<假uid>.json` 和 OV 里的测试记忆要及时清掉，别污染她的记忆。
-- pkill/pgrep 匹配进程名时用 `[b]ot.py` 这种写法，防止模式匹配到执行命令自身的 shell。
+- pkill/pgrep 匹配进程名时用 `[c]ore.app` 这种写法，防止模式匹配到执行命令自身的 shell。
 
 ## Git 工作流
 
