@@ -60,6 +60,9 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
   和兴趣手账都注入 system（persona.tinynote_block / chat 里 ctx.has("interests") 可选消费），
   她会主动分享；web_search 时 Discord 状态显示「正在刷小红书…」
 每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆（memory.record_turn，OV 挂自动降级本地提炼）
+记忆分两层：soul/MEMORY.md（memory_md 插件，每轮对话后实时增量更新，高频/重要/他明确要求记的，
+  每条消息注入 system）是热层；OpenViking 是冷层（复杂/低频/远期，按需语义检索）。
+  主动记忆（他说"记住…"）由 memory_md 的更新提示词保证优先进「重要约定与嘱托」
 ```
 
 ## 加一个新插件
@@ -75,6 +78,8 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
 | `soul/IDENTITY.md` | 她是谁：名字、存在形式、vibe、生日 |
 | `soul/SOUL.md` | 性格、说话风格、小世界、边界。改人设只动这里，每条消息实时加载，改完不用重启 |
 | `soul/USER.md` | 用户画像（指令式条目，带 observed/status 元数据） |
+| `soul/MEMORY.md` | 随身记忆（热层）：高频/重要/他明确要求记的事，每条消息注入 system。memory_md 插件实时维护，**已 gitignore，不要手改**（手改会被下一轮对话覆盖） |
+| `soul/interests.md` | 兴趣手账：interests 插件定期维护，已 gitignore |
 | `core/app.py` | 入口：日志配置（按天轮转 14 天）、插件树解析（PLUGINS_DISABLED/EXTRA + 依赖静态校验）、按序加载、emit ready、阻塞与干净退出 |
 | `core/context.py` | Context：服务注册/注入、事件总线、插件生命周期、fork |
 | `core/config.py` | Config.from_env()：集中全部 env key（30 个），默认值与旧代码逐字一致 |
@@ -82,6 +87,7 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
 | `plugins/persona.py` | 服务 persona：soul/*.md 系统提示（委托 soul.py）+ tinynote 近况块 |
 | `plugins/sessions.py` | 服务 sessions：会话内存态、`data/<uid>.json` 持久化（委托 memory.py）、contact.json 读写 |
 | `plugins/memory_local.py` | 服务 memory（本地兜底提供者）：定期 LLM 提炼 |
+| `plugins/memory_md.py` | 服务 memory_md：随身记忆（soul/MEMORY.md）实时维护。note() 每轮对话后增量更新（锁串行、失败留旧文件），get() 供 chat 注入 system |
 | `plugins/memory_openviking.py` | 服务 memory（OpenViking 提供者，override 本地）：recall/record_turn，OV 挂自动降级 |
 | `plugins/asr.py` | 服务 asr：语音转文字三级降级链（委托 asr_seed.py，whisper 惰性单例兜底） |
 | `plugins/tts.py` | 服务 tts：seed-tts-2.0 → edge-tts 降级（委托 tts_seed.py）、EMOTIONS/音色映射、safe_ogg |
@@ -106,6 +112,7 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
 
 - **密钥**：只放 `config.env` 和 `~/.openviking/ov.conf`，都在 gitignore。提交前确认 `git status` 不含 config.env。
 - **情绪系统**：LLM 通过 `reply` 工具调用交出 `{emotion, voice?, text}`，emotion 字段在 schema 里排前面（流式时先到）。情绪表达靠**语音指令**，走 `additions.context_texts`（官方字段是 **additions JSON 字符串里的 `context_texts`**，放 `req_params` 顶层会被静默忽略；不计费、不朗读）。指令必须写成纯"声音描写"（`用……的语气/哭腔说`），对话式互动指令（"撩撩我""你得跟我互怼"）实测失效；**context_texts 里只放一条纯指令**——混入引用上文/多条叠加/section_id 都会稀释效果（隔离实验实测）。`[#指令]` 内联和 `{{ }}` 句内标签 API 都不认识、会被当台词念出来，均已废弃。生气/哭腔/纯气声悄悄话三条指令措辞经过官网参考音频对照验证（`test_tts_official.py`）。**音色分工**：默认小和 `zh_female_xiaohe_uranus_bigtts`（自带台湾腔）；voice 提示命中"耳语/悄悄话/气声/asmr"时切 vv `zh_female_vv_uranus_bigtts` + 纯气声指令（小和情绪表现力实测弱于 vv）。**合成策略**（`WHOLE_TTS_MAX=350`）：回复 ≤350 字或悄悄话场景整段一次合成（分句并行会让气声/情绪逐句漂移，且整段能保住省略号等情绪细节），超长回复才按句并行抢首音速度。`DOUBAO_CONTEXT` 留空。
+- **括号舞台指示**：模型偶发违反人设写「（笑到声音都在颤）」这类动作/神态描写。chat 插件的 `_strip_stage` 会把它们从文字层剥掉（不进历史/不给用户看/不给 TTS），并用括号里的情绪词做情绪升级线索——emotion=平静但括号在笑/哭，语音按括号暗示的情绪合成（逐句生效）。REPLY_TOOL 的 emotion/text 描述里也加了硬约束，源头减少这种行为。
 - **深度路由**：裁判模型用硅基流动 Qwen3-8B（关思考）。**不要用 seed-character 当裁判**——角色扮演模型做不了元分类，实测全判 CHAT。`reasoning_effort: high` 必须同时显式 `thinking: enabled`，否则 400。
 - **seed-tts**：文本放 `req_params.text` 经 TaskRequest 事件发送；payload 必须带 `user`/`event` 字段。
 - **OV 繁忙**：commit 提炼会占住 OV 服务器导致 recall 超时，这是预期行为（降级跳过，不阻塞回复）；频繁出现再考虑调队列。

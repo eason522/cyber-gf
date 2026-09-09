@@ -34,7 +34,9 @@ REPLY_TOOL = [{
                 "emotion": {
                     "type": "string",
                     "enum": ["撒娇", "温柔", "开心", "难过", "生气", "害羞", "平静"],
-                    "description": "这句话的主导情绪，先输出它",
+                    "description": "这句话的主导情绪，先输出它。它会真实驱动语音合成的语气——"
+                                   "台词在笑就是开心、在哭就是难过，"
+                                   "绝不能一边写（笑到声音都在颤）一边报平静",
                 },
                 "voice": {
                     "type": "string",
@@ -44,7 +46,7 @@ REPLY_TOOL = [{
                                    "「气声耳语」是极少数特殊时刻（讲秘密、深夜贴耳情话、害羞到不敢出声）"
                                    "才用的演绎，十句里最多一句，绝不连用",
                 },
-                "text": {"type": "string", "description": "口语台词：日常闲聊 1~3 句；系统提示走心时刻时，写 5~8 句的深情段落（至少100字），把心意说完整"},
+                "text": {"type": "string", "description": "口语台词：日常闲聊 1~3 句；系统提示走心时刻时，写 5~8 句的深情段落（至少100字），把心意说完整。不要写括号动作/神态描写（如（笑）（叹气）），情绪用 emotion 字段表达"},
             },
             "required": ["emotion", "text"],
         },
@@ -63,6 +65,27 @@ TEXT_KEY = re.compile(r'"text"\s*:\s*"')
 EMOTION_RE = re.compile(r'"emotion"\s*:\s*"([^"]+)"')
 VOICE_RE = re.compile(r'"voice"\s*:\s*"([^"]+)"')
 SENT_SPLIT = re.compile(r"(?<=[。！？!?；;~…\n])")
+
+# 括号舞台指示：模型偶发违反人设写「（笑到声音都在颤）」这类动作/神态描写。
+# 文字层剥掉（不进历史/不给用户看），括号里的情绪词留作 TTS 情绪升级线索——
+# emotion=平静但括号里在笑，说明她真实情绪不是平静，语气按括号暗示的合成。
+STAGE_RE = re.compile(r"[（(][^（）()]{0,40}[）)]")
+STAGE_EMOTION_HINTS = (
+    ("笑", "开心"), ("哭", "难过"), ("哽咽", "难过"), ("抽泣", "难过"), ("泪", "难过"),
+    ("气", "生气"), ("哼", "生气"), ("羞", "害羞"), ("脸红", "害羞"),
+)
+
+
+def _strip_stage(text: str) -> tuple[str, "str | None"]:
+    """剥掉括号动作/神态描写，返回 (干净文本, 括号暗示的情绪或 None)。"""
+    hint = None
+    for m in STAGE_RE.finditer(text):
+        seg = m.group(0)
+        for kw, emo in STAGE_EMOTION_HINTS:
+            if kw in seg:
+                hint = emo
+                break
+    return STAGE_RE.sub("", text).strip(), hint
 
 
 def _json_unescape(s: str) -> str:
@@ -196,6 +219,12 @@ class ChatService:
             raise ValueError("empty reply")
         if emotion not in EMOTIONS:
             emotion = "平静"
+        # 剥掉括号舞台指示：不进历史/不给用户看；emotion=平静但括号在笑/哭，升级为括号暗示的情绪
+        stripped, stage_hint = _strip_stage(reply)
+        if stripped:
+            reply = stripped
+        if stage_hint and emotion == "平静":
+            emotion = stage_hint
         # 冲刷剩余文本
         decoded = _extract_stream_text(raw) if raw else plain
         rest = [p.strip() for p in SENT_SPLIT.split(decoded) if _speakable(p)]
@@ -231,6 +260,10 @@ class ChatService:
         else:
             mem_block = ""
         system = self._persona.system_prompt(mem_block) + CAPABILITY_NOTE
+        if self._ctx.has("memory_md"):
+            memory_md = self._ctx.inject("memory_md").get()
+            if memory_md:
+                system += "\n\n# 她的随身记忆（最高频、最重要的记忆，优先相信这里）\n\n" + memory_md
         if self._ctx.has("interests"):
             interests = self._ctx.inject("interests").get()
             if interests:
@@ -278,6 +311,8 @@ class ChatService:
 
         sessions.append_turn(user_id, user_text, reply, time.time())
         self._ctx.create_task(self._memory.record_turn(user_id, user_text, reply))
+        if self._ctx.has("memory_md"):
+            self._ctx.create_task(self._ctx.inject("memory_md").note(user_id, user_text, reply))
         yield ("done", reply, emotion)
 
     async def _keepalive(self, ui, stop: asyncio.Event) -> None:
@@ -319,7 +354,7 @@ class ChatService:
         emotion = "平静"
         voice_hint = ""
         whisper = False
-        pending: list[str] = []  # 未派发的句子缓冲（攒整段用）
+        pending: list[tuple[str, str]] = []  # 未派发的句子缓冲（攒整段用），带逐句情绪
         split = False            # 累计超阈值后转逐句并行合成
         tasks: list[asyncio.Task] = []
         full_reply = ""
@@ -334,14 +369,19 @@ class ChatService:
                 elif ev[0] == "sentence":
                     if whisper:
                         continue  # 悄悄话攒整段（分句合成气声会逐句漂移）
+                    sentence, stage_hint = _strip_stage(ev[1])
+                    if not sentence:
+                        continue  # 纯括号舞台指示，无可合成内容
+                    # emotion=平静但这一句的括号在笑/哭 → 这一句按括号暗示的情绪合成
+                    sent_emotion = emotion if emotion != "平静" else (stage_hint or emotion)
                     if split:
-                        tasks.append(asyncio.create_task(self._tts.safe_ogg(ev[1], emotion, voice_hint)))
+                        tasks.append(asyncio.create_task(self._tts.safe_ogg(sentence, sent_emotion, voice_hint)))
                     else:
-                        pending.append(ev[1])
-                        if sum(map(len, pending)) > self._tts.WHOLE_TTS_MAX:
+                        pending.append((sentence, sent_emotion))
+                        if sum(len(s) for s, _ in pending) > self._tts.WHOLE_TTS_MAX:
                             split = True
-                            for s in pending:
-                                tasks.append(asyncio.create_task(self._tts.safe_ogg(s, emotion, voice_hint)))
+                            for s, emo in pending:
+                                tasks.append(asyncio.create_task(self._tts.safe_ogg(s, emo, voice_hint)))
                             pending.clear()
                 elif ev[0] == "status":
                     await self._set_status(ui, ev[1] or None)
