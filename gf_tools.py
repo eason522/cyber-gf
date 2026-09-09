@@ -113,20 +113,27 @@ async def web_search(query: str) -> str:
     key = os.environ.get("TAVILY_API_KEY", "")
     if not key:
         return "搜索功能还没配置好"
-    # Tavily 在海外，走代理（trust_env 默认读 HTTPS_PROXY）
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.post("https://api.tavily.com/search", json={
-            "api_key": key, "query": query, "max_results": 5,
-        })
-        r.raise_for_status()
-        data = r.json()
-    results = data.get("results") or []
-    if not results:
-        return "没搜到相关内容"
-    return "\n".join(
-        f"- {x.get('title', '')}: {(x.get('content') or '')[:200]}（{x.get('url', '')}）"
-        for x in results[:5]
-    )
+    last_err: Exception | None = None
+    for attempt in range(2):  # 网络抽风常见，自动重试一次
+        try:
+            # Tavily 在海外，走代理（trust_env 默认读 HTTPS_PROXY）
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.post("https://api.tavily.com/search", json={
+                    "api_key": key, "query": query, "max_results": 5,
+                })
+                r.raise_for_status()
+                data = r.json()
+            results = data.get("results") or []
+            if not results:
+                return "没搜到相关内容"
+            return "\n".join(
+                f"- {x.get('title', '')}: {(x.get('content') or '')[:200]}（{x.get('url', '')}）"
+                for x in results[:5]
+            )
+        except Exception as e:
+            last_err = e
+            log.info("web_search attempt %d failed: %r", attempt, e)
+    raise last_err
 
 
 def list_directory(path: str) -> str:
@@ -168,5 +175,6 @@ async def run(name: str, args: dict) -> str:
             return write_file(args.get("path", ""), args.get("content", ""))
         return f"没有 {name} 这个工具"
     except Exception as e:
-        log.warning("tool %s failed: %s", name, e)
-        return f"工具出错了：{e}"
+        log.warning("tool %s failed: %r", name, e)
+        hint = "网络问题，可以换个关键词重试一次" if isinstance(e, httpx.HTTPError) else str(e)
+        return f"工具出错了（{type(e).__name__}）：{hint}"
