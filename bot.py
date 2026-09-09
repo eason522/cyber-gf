@@ -7,7 +7,9 @@ import re
 import subprocess
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import edge_tts
 from openai import AsyncOpenAI
@@ -48,8 +50,11 @@ _extracting: set[int] = set()
 # 心跳：主动关心
 HEARTBEAT_MINUTES = int(os.getenv("HEARTBEAT_MINUTES", "45"))
 HEARTBEAT_SILENCE_H = float(os.getenv("HEARTBEAT_SILENCE_H", "2"))
-ACTIVE_HOURS = (8, 23)  # 深夜免打扰
+ACTIVE_HOURS = (8, 23)  # 深夜免打扰（北京时间）
 CONTACT_FILE = Path(__file__).parent / "data" / "contact.json"
+# 心跳时她可以写小本本（给时间工具好让日记日期写对；不给联网搜索，保持安静场景纯粹）
+HEARTBEAT_TOOLS = [t for t in gf_tools.TOOL_DEFS
+                   if t["function"]["name"] in ("get_current_time", "list_directory", "read_file", "write_file")]
 
 
 def _load_contact() -> dict:
@@ -617,7 +622,7 @@ def _touch_contact(update: Update) -> None:
 
 
 async def heartbeat_loop(send) -> None:
-    """静默契约：没事就 NO_REPLY，绝不打扰。
+    """静默契约：没事就 NO_REPLY，绝不打扰；不想打扰但有话想说时，可以写进小本本（tinynote/）。
 
     send(chat_id, text, ogg)：平台相关的主动发消息回调，ogg 为语音文件路径（TTS 失败时为 None）。
     """
@@ -629,8 +634,8 @@ async def heartbeat_loop(send) -> None:
                 continue
             if contact.get("platform", "telegram") != BOT_PLATFORM:
                 continue  # 最后在另一个平台聊的，不在本平台打扰
-            hour = time.localtime().tm_hour
-            if not (ACTIVE_HOURS[0] <= hour < ACTIVE_HOURS[1]):
+            now_dt = datetime.now(ZoneInfo("Asia/Shanghai"))  # 服务器是 UTC，他在北京时间
+            if not (ACTIVE_HOURS[0] <= now_dt.hour < ACTIVE_HOURS[1]):
                 continue
             silence_h = (time.time() - contact.get("ts", 0)) / 3600
             if silence_h < HEARTBEAT_SILENCE_H:
@@ -640,27 +645,50 @@ async def heartbeat_loop(send) -> None:
             recalled = await ov_memory.recall("最近关心他、问候他、约定、他的近况")
             mem_block = "\n".join(f"- {m}" for m in recalled or store["memories"])
             system = soul.build_system(mem_block)
-            now = time.strftime("%H:%M")
+            now = now_dt.strftime("%H:%M")
             msgs = [
                 {"role": "system", "content": system},
                 *store["history"][-HISTORY_TURNS * 2 :],
                 {"role": "user", "content": (
                     f"（系统提示：现在是{now}，他已经{silence_h:.1f}小时没和你说话了。"
                     "如果你想主动关心他，就调用 reply 工具发一条消息；"
-                    "如果没有特别想说的（比如刚聊过不久、没有理由打扰），就只回复 NO_REPLY，什么也别发。）"
+                    "如果不想打扰他、但心里有话想说，可以写进你的小本本"
+                    "（用 write_file 写到 ~/cyber-gf/tinynote/，比如日记、随笔，写之前可以先用 list_directory 看看以前写过什么）；"
+                    "如果什么都不想做（比如刚聊过不久、没有理由打扰），就只回复 NO_REPLY，什么也别发。）"
                 )},
             ]
-            resp = await llm.chat.completions.create(
-                model=LLM_MODEL, messages=msgs, tools=REPLY_TOOL, tool_choice="auto",
-            )
-            m = resp.choices[0].message
-            if not m.tool_calls:
-                continue  # NO_REPLY
-            args = json.loads(m.tool_calls[0].function.arguments)
-            text = (args.get("text") or "").strip()
-            emotion = args.get("emotion") or "温柔"
+            text = ""
+            emotion = "温柔"
+            for _ in range(3):  # 行动工具（写/翻小本本）最多循环 3 轮，reply 或 NO_REPLY 收尾
+                resp = await llm.chat.completions.create(
+                    model=LLM_MODEL, messages=msgs, tools=REPLY_TOOL + HEARTBEAT_TOOLS, tool_choice="auto",
+                )
+                m = resp.choices[0].message
+                if not m.tool_calls:
+                    break  # NO_REPLY
+                calls = m.tool_calls
+                reply_call = next((c for c in calls if c.function.name == "reply"), None)
+                if reply_call:
+                    args = json.loads(reply_call.function.arguments)
+                    text = (args.get("text") or "").strip()
+                    emotion = args.get("emotion") or "温柔"
+                    break
+                msgs.append({
+                    "role": "assistant",
+                    "tool_calls": [{"id": c.id, "type": "function",
+                                    "function": {"name": c.function.name, "arguments": c.function.arguments}}
+                                   for c in calls],
+                })
+                for c in calls:
+                    try:
+                        targs = json.loads(c.function.arguments or "{}")
+                    except json.JSONDecodeError:
+                        targs = {}
+                    out = await gf_tools.run(c.function.name, targs)
+                    log.info("heartbeat tool: %s(%s) -> %s", c.function.name, targs, out[:60])
+                    msgs.append({"role": "tool", "tool_call_id": c.id, "content": out})
             if not text:
-                continue
+                continue  # NO_REPLY 或只写了小本本，不打扰他
             log.info("heartbeat: reaching out (%s): %s", emotion, text[:50])
             store["history"].append({"role": "assistant", "content": text})
             mem.save(uid, store)

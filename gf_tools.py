@@ -90,7 +90,9 @@ TOOL_DEFS = [
 
 
 def _safe_path(p: str) -> Path:
-    path = Path(p).expanduser() if os.path.isabs(p) else ALLOWED_ROOT / p
+    path = Path(p).expanduser()  # 模型常写 ~/cyber-gf/...，先展开家目录
+    if not path.is_absolute():
+        path = ALLOWED_ROOT / path
     path = path.resolve()
     if path != ALLOWED_ROOT and ALLOWED_ROOT not in path.parents:
         raise PermissionError("只能访问 /home/eason 下的文件")

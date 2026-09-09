@@ -36,7 +36,7 @@ OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启）
   ├─ judge_depth        深度路由：闲聊 minimal(关思考) / 走心 high(开思考)
   ├─ chat_stream        seed-character 流式 + 工具调用循环（gf_tools：时间/Tavily搜索/文件读写 → reply 收尾，emotion 先行）
   └─ seed-tts-2.0       ≤350字(或悄悄话)整段一次合成，超长才按句并行；情绪→语气指令，语音先发文字后到
-每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆；心跳每 45 分钟主动关心（NO_REPLY 契约）
+每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆；心跳每 45 分钟主动关心（NO_REPLY 契约；不想打扰时可写小本本 tinynote/，心跳判定用北京时间）
 ```
 
 ## 文件职责（改哪里）
