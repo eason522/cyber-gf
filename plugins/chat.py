@@ -231,6 +231,10 @@ class ChatService:
         else:
             mem_block = ""
         system = self._persona.system_prompt(mem_block) + CAPABILITY_NOTE
+        if self._ctx.has("interests"):
+            interests = self._ctx.inject("interests").get()
+            if interests:
+                system += "\n\n# 她的兴趣手账（她自己最新的兴趣画像，聊起相关话题时可以自然地带上她的真实偏好）\n\n" + interests
         notes = self._persona.tinynote_block()
         if notes:
             system += "\n\n# 她的小本本近况（她自己写的日记/冲浪笔记，聊天时可以自然地分享里面的新发现）\n\n" + notes

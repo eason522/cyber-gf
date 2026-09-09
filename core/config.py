@@ -41,6 +41,8 @@ class Config:
     asr_seed: str              # ASR_SEED（"0" 关闭 seedasr，其余值开启）
     # 冲浪循环（bot.py）
     surf_minutes: int          # SURF_MINUTES
+    # 兴趣画像（plugins/interests.py）
+    interests_hours: float     # INTERESTS_HOURS（兴趣手账刷新周期，默认 6 小时）
     # 工具箱（gf_tools.py）
     tavily_api_key: str        # TAVILY_API_KEY
     # OpenViking（ov_memory.py）
@@ -78,6 +80,7 @@ class Config:
             asr_model=env.get("ASR_MODEL", "doubao-seed-2-0-mini-260428"),
             asr_seed=env.get("ASR_SEED", "1"),
             surf_minutes=int(env.get("SURF_MINUTES", "180")),
+            interests_hours=float(env.get("INTERESTS_HOURS", "6")),
             tavily_api_key=env.get("TAVILY_API_KEY", ""),
             ov_url=env.get("OV_URL", "http://127.0.0.1:1933"),
             ov_api_key=env.get("OV_API_KEY", ""),

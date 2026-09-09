@@ -40,13 +40,21 @@ class SurfService:
         self._model = cfg.llm_model
 
     async def _surf_once(self) -> None:
-        """一轮冲浪：翻小本本 → 搜索 → 挑感兴趣的 web_read 细读 → 连心情一起记录，最多 10 轮工具调用。全程静默，不打扰他。"""
+        """一轮冲浪：翻小本本 → 按兴趣手账引导搜索 → 挑感兴趣的 web_read 细读 → 连心情一起记录，最多 10 轮工具调用。全程静默，不打扰他。"""
         system = self._ctx.inject("persona").system_prompt("")
         tools = self._ctx.inject("tools")
         llm = self._ctx.inject("llm")
+        prompt = SURF_PROMPT
+        if self._ctx.has("interests"):
+            interests = self._ctx.inject("interests").get()
+            if interests:
+                prompt += (
+                    "\n\n你最近的兴趣手账（优先围绕「长期热爱」和「最近上头」刷，"
+                    "也留点时间翻翻「想探索的新领域」，别让兴趣越刷越窄）：\n" + interests
+                )
         msgs = [
             {"role": "system", "content": system},
-            {"role": "user", "content": SURF_PROMPT},
+            {"role": "user", "content": prompt},
         ]
         for i in range(10):
             resp = await llm.chat.completions.create(

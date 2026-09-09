@@ -54,9 +54,11 @@ core/context.py：Context = provide/inject（沿 parent 链查找）+ on/emit �
        └─ tts（seed-tts-2.0 → edge-tts 降级）  ≤350字(或悄悄话)整段一次合成，超长才按句并行；语音先发文字后到
 heartbeat 插件：每 45 分钟主动关心（NO_REPLY 契约；可写小本本 tinynote/；北京时间判定；
   发消息走 ctx.inject("platform").send(chat_id, text, ogg)，无平台服务时记 warning 跳过）
-surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，刷到感兴趣的用 web_read 点进原文细读，
+surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，方向由兴趣手账引导（interests.get()），
+  刷到感兴趣的用 web_read 点进原文细读，
   再把发现连当时的心情/想跟他怎么讲一起写进 tinynote/（日记式，不记流水账）；聊天时小本本近况
-  注入 system（persona.tinynote_block），她会主动分享；web_search 时 Discord 状态显示「正在刷小红书…」
+  和兴趣手账都注入 system（persona.tinynote_block / chat 里 ctx.has("interests") 可选消费），
+  她会主动分享；web_search 时 Discord 状态显示「正在刷小红书…」
 每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆（memory.record_turn，OV 挂自动降级本地提炼）
 ```
 
@@ -75,7 +77,7 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
 | `soul/USER.md` | 用户画像（指令式条目，带 observed/status 元数据） |
 | `core/app.py` | 入口：日志配置（按天轮转 14 天）、插件树解析（PLUGINS_DISABLED/EXTRA + 依赖静态校验）、按序加载、emit ready、阻塞与干净退出 |
 | `core/context.py` | Context：服务注册/注入、事件总线、插件生命周期、fork |
-| `core/config.py` | Config.from_env()：集中全部 env key（29 个），默认值与旧代码逐字一致 |
+| `core/config.py` | Config.from_env()：集中全部 env key（30 个），默认值与旧代码逐字一致 |
 | `plugins/llm.py` | 服务 llm：主模型 AsyncOpenAI 客户端单例 |
 | `plugins/persona.py` | 服务 persona：soul/*.md 系统提示（委托 soul.py）+ tinynote 近况块 |
 | `plugins/sessions.py` | 服务 sessions：会话内存态、`data/<uid>.json` 持久化（委托 memory.py）、contact.json 读写 |
@@ -85,6 +87,7 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
 | `plugins/tts.py` | 服务 tts：seed-tts-2.0 → edge-tts 降级（委托 tts_seed.py）、EMOTIONS/音色映射、safe_ogg |
 | `plugins/tools_builtin.py` | 服务 tools：工具注册表 ToolRegistry（defs/register/run），内置 6 个工具：时间 / web_search / web_read（点进链接细读正文，Tavily extract 主、直连剥 HTML 兜底）/ list_directory / read_file / write_file。文件操作限制在 /home/eason 下，拒绝 config.env/.ssh/.git 等敏感路径；工具出错只返回错误字符串 |
 | `plugins/depth_router.py` | 服务 depth：judge_depth（硅基流动 Qwen3-8B 关思考 + DEEP_KEYWORDS 快捷路径） |
+| `plugins/interests.py` | 服务 interests：兴趣手账（data/interests.md），定期（INTERESTS_HOURS，默认 6h）用主模型综合长期记忆+小本本+近期对话重写；固定四分区（长期热爱/最近上头/冷却中/想探索的新领域）+ 小步更新规则防兴趣过拟合 |
 | `plugins/chat.py` | 服务 chat：核心流水线。stream() 事件流 + REPLY_TOOL schema + 工具调用循环（最多4轮、末轮强制 reply）；process() 统一 TG/Discord 的消息派发（攒句/整段≤350字/超长分句并行/语音先发文字后到） |
 | `plugins/heartbeat.py` | 后台任务：45 分钟心跳（NO_REPLY 契约、北京时间沉默判定、HEARTBEAT_TOOLS 可写小本本），platform 服务延迟 inject |
 | `plugins/surf.py` | 后台任务：3 小时冲浪循环，写 tinynote |
