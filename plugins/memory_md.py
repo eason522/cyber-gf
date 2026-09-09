@@ -8,7 +8,8 @@
 - data/<uid>.json 的本地 memories：OV 挂掉时的兜底。
 
 主动记忆（他明确说"记住……"）由 UPDATE_PROMPT 规则保证优先进「重要约定与嘱托」；
-被动记忆是每轮对话后 note() 的自动增量更新（fire-and-forget，锁串行防并发写坏文件）。
+被动记忆是对话后的自动增量更新：每轮对话进待更新缓冲，这波对话停 2 分钟后
+批量更新一次（debounce——逐轮实时更新浪费调用，且整段上下文提炼质量更好）。
 """
 
 import asyncio
@@ -21,6 +22,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MEMORY_MD_PATH = BASE_DIR / "soul" / "MEMORY.md"  # 已 gitignore（实时重写，不进仓库）
 
 MAX_DOC_CHARS = 500  # 随身记忆上限：要的是高频/重要，不是全集（全集在 OpenViking）
+UPDATE_DELAY = 120   # 对话停下多少秒后才批量更新记忆卡（debounce）
 
 requires = ["llm"]
 provides = ["memory_md"]
@@ -49,9 +51,8 @@ UPDATE_PROMPT = """你在帮一个叫暖暖的台湾女孩维护她的「随身�
 旧随身记忆：
 %s
 
-最新这轮对话：
-他：%s
-她：%s""" % (MAX_DOC_CHARS, "%s", "%s", "%s")
+最近这几轮对话：
+%s""" % (MAX_DOC_CHARS, "%s", "%s")
 
 
 class MemoryMdService:
@@ -60,6 +61,8 @@ class MemoryMdService:
         cfg = ctx.inject("config")
         self._model = cfg.llm_model
         self._lock = asyncio.Lock()
+        self._pending: list[tuple[str, str]] = []  # 待更新的对话轮次（user_text, reply）
+        self._timer: asyncio.Task | None = None
 
     def get(self) -> str:
         """当前随身记忆全文；不存在返回空串。"""
@@ -69,12 +72,40 @@ class MemoryMdService:
             return ""
 
     async def note(self, user_id: int, user_text: str, reply: str) -> None:
-        """每轮对话后增量更新记忆卡（锁串行，失败保留旧文件）。"""
+        """每轮对话后调用：进缓冲并重置计时器，这波对话停 UPDATE_DELAY 秒后批量更新一次。"""
+        self._pending.append((user_text[:300], reply[:500]))
+        if self._timer and not self._timer.done():
+            self._timer.cancel()
+        self._timer = self._ctx.create_task(self._flush_later())
+
+    async def _flush_later(self) -> None:
+        try:
+            await asyncio.sleep(UPDATE_DELAY)
+        except asyncio.CancelledError:
+            return  # 来了新消息，计时重置
+        try:
+            await self._flush()
+        except Exception:
+            log.exception("memory_md flush failed")  # 缓冲保留，下轮对话后再试
+
+    async def flush_now(self) -> None:
+        """进程退出前把缓冲的几轮落盘（on_dispose 调用）。"""
+        if self._timer and not self._timer.done():
+            self._timer.cancel()
+        try:
+            await self._flush()
+        except Exception:
+            log.exception("memory_md final flush failed")
+
+    async def _flush(self) -> None:
+        """把缓冲的几轮对话一次性喂给主模型，增量重写记忆卡。失败保留旧文件、保留缓冲下次再试。"""
         async with self._lock:
+            if not self._pending:
+                return
+            convo = "\n".join(f"他：{u}\n她：{r}" for u, r in self._pending)
             old = self.get()
             llm = self._ctx.inject("llm")
-            prompt = UPDATE_PROMPT % (old or "（还没有，这是第一条）",
-                                      user_text[:300], reply[:500])
+            prompt = UPDATE_PROMPT % (old or "（还没有，这是第一条）", convo)
             resp = await llm.chat.completions.create(
                 model=self._model,
                 messages=[{"role": "user", "content": prompt}],
@@ -87,8 +118,11 @@ class MemoryMdService:
             doc = text[start:][: MAX_DOC_CHARS * 2]
             if doc != old:
                 MEMORY_MD_PATH.write_text(doc + "\n", encoding="utf-8")
-                log.info("memory_md updated (%d chars)", len(doc))
+                log.info("memory_md updated (%d turns, %d chars)", len(self._pending), len(doc))
+            self._pending.clear()
 
 
 def apply(ctx) -> None:
-    ctx.provide("memory_md", MemoryMdService(ctx))
+    svc = MemoryMdService(ctx)
+    ctx.provide("memory_md", svc)
+    ctx.on_dispose(svc.flush_now)  # 退出前把缓冲的几轮对话落盘

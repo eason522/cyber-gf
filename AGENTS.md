@@ -60,7 +60,7 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
   和兴趣手账都注入 system（persona.tinynote_block / chat 里 ctx.has("interests") 可选消费），
   她会主动分享；web_search 时 Discord 状态显示「正在刷小红书…」
 每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆（memory.record_turn，OV 挂自动降级本地提炼）
-记忆分两层：soul/MEMORY.md（memory_md 插件，每轮对话后实时增量更新，高频/重要/他明确要求记的，
+记忆分两层：soul/MEMORY.md（memory_md 插件，对话停 2 分钟后把这波对话批量喂给主模型更新一次（debounce），高频/重要/他明确要求记的，
   每条消息注入 system）是热层；OpenViking 是冷层（复杂/低频/远期，按需语义检索）。
   主动记忆（他说"记住…"）由 memory_md 的更新提示词保证优先进「重要约定与嘱托」
 ```
@@ -87,7 +87,7 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
 | `plugins/persona.py` | 服务 persona：soul/*.md 系统提示（委托 soul.py）+ tinynote 近况块 |
 | `plugins/sessions.py` | 服务 sessions：会话内存态、`data/<uid>.json` 持久化（委托 memory.py）、contact.json 读写 |
 | `plugins/memory_local.py` | 服务 memory（本地兜底提供者）：定期 LLM 提炼 |
-| `plugins/memory_md.py` | 服务 memory_md：随身记忆（soul/MEMORY.md）实时维护。note() 每轮对话后增量更新（锁串行、失败留旧文件），get() 供 chat 注入 system |
+| `plugins/memory_md.py` | 服务 memory_md：随身记忆（soul/MEMORY.md）实时维护。note() 每轮进缓冲 + 重置计时器（UPDATE_DELAY=120s debounce，一波对话只更新一次），失败留旧文件、缓冲保留下次再试，on_dispose 退出前强制落盘；get() 供 chat 注入 system |
 | `plugins/memory_openviking.py` | 服务 memory（OpenViking 提供者，override 本地）：recall/record_turn，OV 挂自动降级 |
 | `plugins/asr.py` | 服务 asr：语音转文字三级降级链（委托 asr_seed.py，whisper 惰性单例兜底） |
 | `plugins/tts.py` | 服务 tts：seed-tts-2.0 → edge-tts 降级（委托 tts_seed.py）、EMOTIONS/音色映射、safe_ogg |
