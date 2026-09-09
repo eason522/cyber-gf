@@ -1,4 +1,4 @@
-"""interests 插件：暖暖的兴趣画像（data/interests.md），系统定期用主模型维护。
+"""interests 插件：暖暖的兴趣画像（soul/interests.md），系统定期用主模型维护。
 
 素材来自她的长期记忆（data/*.json 的 memories）、小本本（tinynote/）和近期对话，
 综合提炼成一份"兴趣手账"。防过拟合靠固定四分区结构 + 更新规则（见 REFRESH_PROMPT）：
@@ -16,7 +16,7 @@ from pathlib import Path
 log = logging.getLogger("cyber-gf.interests")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-INTERESTS_PATH = BASE_DIR / "data" / "interests.md"
+INTERESTS_PATH = BASE_DIR / "soul" / "interests.md"  # 放 soul/（"她是谁"的一部分），已 gitignore（系统反复重写，不进仓库）
 TINYNOTE_DIR = BASE_DIR / "tinynote"
 DATA_DIR = BASE_DIR / "data"
 

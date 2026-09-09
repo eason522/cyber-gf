@@ -87,7 +87,7 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
 | `plugins/tts.py` | 服务 tts：seed-tts-2.0 → edge-tts 降级（委托 tts_seed.py）、EMOTIONS/音色映射、safe_ogg |
 | `plugins/tools_builtin.py` | 服务 tools：工具注册表 ToolRegistry（defs/register/run），内置 6 个工具：时间 / web_search / web_read（点进链接细读正文，Tavily extract 主、直连剥 HTML 兜底）/ list_directory / read_file / write_file。文件操作限制在 /home/eason 下，拒绝 config.env/.ssh/.git 等敏感路径；工具出错只返回错误字符串 |
 | `plugins/depth_router.py` | 服务 depth：judge_depth（硅基流动 Qwen3-8B 关思考 + DEEP_KEYWORDS 快捷路径） |
-| `plugins/interests.py` | 服务 interests：兴趣手账（data/interests.md），定期（INTERESTS_HOURS，默认 6h）用主模型综合长期记忆+小本本+近期对话重写；固定四分区（长期热爱/最近上头/冷却中/想探索的新领域）+ 小步更新规则防兴趣过拟合 |
+| `plugins/interests.py` | 服务 interests：兴趣手账（`soul/interests.md`，已 gitignore——系统反复重写不进仓库），定期（INTERESTS_HOURS，默认 6h）用主模型综合长期记忆+小本本+近期对话重写；固定四分区（长期热爱/最近上头/冷却中/想探索的新领域）+ 小步更新规则防兴趣过拟合 |
 | `plugins/chat.py` | 服务 chat：核心流水线。stream() 事件流 + REPLY_TOOL schema + 工具调用循环（最多4轮、末轮强制 reply）；process() 统一 TG/Discord 的消息派发（攒句/整段≤350字/超长分句并行/语音先发文字后到） |
 | `plugins/heartbeat.py` | 后台任务：45 分钟心跳（NO_REPLY 契约、北京时间沉默判定、HEARTBEAT_TOOLS 可写小本本），platform 服务延迟 inject |
 | `plugins/surf.py` | 后台任务：3 小时冲浪循环，写 tinynote |

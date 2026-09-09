@@ -7,3 +7,4 @@ config.env
 *.mp3
 get-pip.py
 tinynote/
+soul/interests.md
