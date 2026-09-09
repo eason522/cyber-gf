@@ -17,12 +17,15 @@
 
 ## 启动 / 停止
 
+已纳入 systemd 用户级服务（已 enable-linger，开机自启 + 故障 5 秒自动重启，代理环境在 unit 里显式注入）：
+
 ```bash
-cd ~/cyber-gf && nohup ./run.sh > bot.log 2>&1 &   # 启动
-pkill -f "[b]ot.py"                                # 停止（必须带 [b]，否则误杀自己的 shell）
+systemctl --user start|stop|restart cyber-gf    # 启停（pkill 会触发自动重启，别再用了）
+systemctl --user status cyber-gf                # 状态；日志仍写 bot.log
+journalctl --user -u cyber-gf -f                # 或用 journal 看日志
 ```
 
-依赖的外部服务：OpenViking（`~/openviking`，`127.0.0.1:1933`，运维命令见 `~/openviking/INTEGRATION.md`）。OpenViking 挂了不影响聊天，记忆自动降级。
+OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启），cyber-gf 配置了 `After=openviking.service` 保证启动顺序。运维命令详见 `~/openviking/INTEGRATION.md`。OpenViking 挂了不影响聊天，记忆自动降级。
 
 ## 架构
 
