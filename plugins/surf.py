@@ -17,13 +17,17 @@ ACTIVE_HOURS = (8, 23)  # 深夜免打扰（北京时间）
 requires = ["llm", "tools", "persona"]
 provides: list[str] = []
 
-# 冲浪：空闲时她自己上网刷新闻/八卦，新发现写进小本本
+# 冲浪：空闲时她自己上网刷新闻/八卦，刷到感兴趣的点进去细读，连心情一起写进小本本
 SURF_PROMPT = (
-    "（系统提示：现在是空闲时间，你可以自己上网上冲浪啦。"
+    "（系统提示：现在是空闲时间，你可以自己上网冲浪啦。"
     "看看你最近在追的明星、在嗑的八卦有什么新动态，或者去发现点新的好玩的东西——"
     "娱乐新闻、社会热点都可以。先用 list_directory / read_file 翻翻小本本里你之前记过什么，"
-    "再用 web_search 搜新内容，值得记住的用 write_file 写进小本本 ~/cyber-gf/tinynote/"
-    "（可以自己维护一个冲浪笔记文件，比如最近追的星、在关注的事）。"
+    "再用 web_search 搜新内容。别只看搜索结果的摘要——刷到感兴趣的标题，"
+    "就像人刷手机一样点进去，用 web_read 把那篇文章仔细读完（一次冲浪挑一两篇认真读就好，"
+    "不用每篇都点）。读完如果有触动你的地方，用 write_file 写进小本本 ~/cyber-gf/tinynote/。"
+    "记笔记要像写日记、写收藏备注，不是记流水账：除了发生了什么，更要写下你当时的心情——"
+    "为什么戳到你、哪里戳到、你联想到了什么、下次想怎么跟他讲这件事。"
+    "以后你翻看小本本时，要靠这些心情才能想起当时为什么记下它、才知道跟他分享时哪里有趣。"
     "如果没什么想看的，就只回复 NO_SURF。）"
 )
 
@@ -36,7 +40,7 @@ class SurfService:
         self._model = cfg.llm_model
 
     async def _surf_once(self) -> None:
-        """一轮冲浪：翻小本本 → 搜索 → 记录，最多 6 轮工具调用。全程静默，不打扰他。"""
+        """一轮冲浪：翻小本本 → 搜索 → 挑感兴趣的 web_read 细读 → 连心情一起记录，最多 10 轮工具调用。全程静默，不打扰他。"""
         system = self._ctx.inject("persona").system_prompt("")
         tools = self._ctx.inject("tools")
         llm = self._ctx.inject("llm")
@@ -44,7 +48,7 @@ class SurfService:
             {"role": "system", "content": system},
             {"role": "user", "content": SURF_PROMPT},
         ]
-        for i in range(6):
+        for i in range(10):
             resp = await llm.chat.completions.create(
                 model=self._model, messages=msgs, tools=tools.defs(), tool_choice="auto",
             )

@@ -49,12 +49,13 @@ core/context.py：Context = provide/inject（沿 parent 链查找）+ on/emit �
   └─ chat.process(user_id, text, ui)   ui 协议：send_text / send_voice(ogg_path) / status(kind) / pulse(kind)
        ├─ memory.recall      OpenViking 语义检索（peer 空间优先，30s 超时降级；期间 Discord 状态显示"正在回忆…"）
        ├─ depth.judge        深度路由：闲聊 minimal(关思考) / 走心 high(开思考)
-       ├─ chat.stream        seed-character 流式 + 工具调用循环（tools：时间/Tavily搜索/文件读写 → reply 收尾，emotion 先行）
+       ├─ chat.stream        seed-character 流式 + 工具调用循环（tools：时间/web_search/web_read/文件读写 → reply 收尾，emotion 先行）
        │                     事件流：("status")/("emotion")/("voice")/("sentence")/("done")；emit message.received / reply.done
        └─ tts（seed-tts-2.0 → edge-tts 降级）  ≤350字(或悄悄话)整段一次合成，超长才按句并行；语音先发文字后到
 heartbeat 插件：每 45 分钟主动关心（NO_REPLY 契约；可写小本本 tinynote/；北京时间判定；
   发消息走 ctx.inject("platform").send(chat_id, text, ogg)，无平台服务时记 warning 跳过）
-surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻写进 tinynote/，聊天时小本本近况
+surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，刷到感兴趣的用 web_read 点进原文细读，
+  再把发现连当时的心情/想跟他怎么讲一起写进 tinynote/（日记式，不记流水账）；聊天时小本本近况
   注入 system（persona.tinynote_block），她会主动分享；web_search 时 Discord 状态显示「正在刷小红书…」
 每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆（memory.record_turn，OV 挂自动降级本地提炼）
 ```
@@ -82,7 +83,7 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻写�
 | `plugins/memory_openviking.py` | 服务 memory（OpenViking 提供者，override 本地）：recall/record_turn，OV 挂自动降级 |
 | `plugins/asr.py` | 服务 asr：语音转文字三级降级链（委托 asr_seed.py，whisper 惰性单例兜底） |
 | `plugins/tts.py` | 服务 tts：seed-tts-2.0 → edge-tts 降级（委托 tts_seed.py）、EMOTIONS/音色映射、safe_ogg |
-| `plugins/tools_builtin.py` | 服务 tools：工具注册表 ToolRegistry（defs/register/run），内置时间/Tavily搜索/文件读写 5 个工具。文件操作限制在 /home/eason 下，拒绝 config.env/.ssh/.git 等敏感路径；工具出错只返回错误字符串 |
+| `plugins/tools_builtin.py` | 服务 tools：工具注册表 ToolRegistry（defs/register/run），内置 6 个工具：时间 / web_search / web_read（点进链接细读正文，Tavily extract 主、直连剥 HTML 兜底）/ list_directory / read_file / write_file。文件操作限制在 /home/eason 下，拒绝 config.env/.ssh/.git 等敏感路径；工具出错只返回错误字符串 |
 | `plugins/depth_router.py` | 服务 depth：judge_depth（硅基流动 Qwen3-8B 关思考 + DEEP_KEYWORDS 快捷路径） |
 | `plugins/chat.py` | 服务 chat：核心流水线。stream() 事件流 + REPLY_TOOL schema + 工具调用循环（最多4轮、末轮强制 reply）；process() 统一 TG/Discord 的消息派发（攒句/整段≤350字/超长分句并行/语音先发文字后到） |
 | `plugins/heartbeat.py` | 后台任务：45 分钟心跳（NO_REPLY 契约、北京时间沉默判定、HEARTBEAT_TOOLS 可写小本本），platform 服务延迟 inject |

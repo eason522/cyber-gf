@@ -1,6 +1,6 @@
 """tools 插件：暖暖的工具箱注册表（原 gf_tools.py 的注册表化改造，实现已搬入本文件）。
 
-内置 5 个工具：get_current_time / web_search / list_directory / read_file / write_file，
+内置 6 个工具：get_current_time / web_search / web_read / list_directory / read_file / write_file，
 apply 时注册；其他插件可 register(schema, handler) 挂新工具（handler 签名
 (args: dict) -> str，sync/async 均可，同名覆盖）。
 
@@ -11,7 +11,9 @@ web_search 是 httpx 异步非阻塞实现，无需 to_thread。
 
 import inspect
 import logging
+import re
 from datetime import datetime
+from html import unescape
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -27,6 +29,7 @@ DENY_NAMES = {"config.env", ".env", "ov.conf", "ovcli.conf"}
 DENY_PARTS = {".ssh", ".git", ".gnupg"}
 MAX_READ_CHARS = 4000
 MAX_LIST_ENTRIES = 100
+MAX_WEBREAD_CHARS = 3000
 
 TOOL_DEFS = [
     {
@@ -48,6 +51,20 @@ TOOL_DEFS = [
                     "query": {"type": "string", "description": "搜索关键词"},
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_read",
+            "description": "点进链接细读网页全文。搜索刷到感兴趣的文章、新闻、帖子时用它仔细看内容，别只看搜索结果的摘要",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "要细读的网页链接"},
+                },
+                "required": ["url"],
             },
         },
     },
@@ -143,6 +160,46 @@ async def _web_search(query: str, api_key: str) -> str:
     raise last_err
 
 
+def _html_to_text(html: str) -> str:
+    """粗剥 HTML：去 script/style，剥标签，合并空白。兜底用，不追求完美。"""
+    html = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", html)
+    html = re.sub(r"(?s)<!--.*?-->", " ", html)
+    text = re.sub(r"(?s)<[^>]+>", " ", html)
+    text = unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+async def _web_read(url: str, api_key: str) -> str:
+    """点进链接细读正文：优先 Tavily extract（正文抽取质量好），失败则直接抓页面粗剥 HTML。"""
+    url = (url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return "这个链接打不开欸"
+    if api_key:
+        try:
+            async with httpx.AsyncClient(timeout=25) as c:  # Tavily 在海外，走代理
+                r = await c.post("https://api.tavily.com/extract",
+                                 json={"api_key": api_key, "urls": [url]})
+                r.raise_for_status()
+                results = r.json().get("results") or []
+                content = (results[0].get("raw_content") or "").strip() if results else ""
+            if content:
+                return content[:MAX_WEBREAD_CHARS] + (
+                    "\n…（文章太长，只读了前面部分）" if len(content) > MAX_WEBREAD_CHARS else "")
+        except Exception as e:
+            log.info("web_read tavily extract failed: %r", e)
+    async with httpx.AsyncClient(
+        timeout=20, follow_redirects=True,
+        headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126 Safari/537.36"},
+    ) as c:
+        r = await c.get(url)
+        r.raise_for_status()
+    text = _html_to_text(r.text)
+    if not text:
+        return "这个页面读不出内容"
+    return text[:MAX_WEBREAD_CHARS] + (
+        "\n…（文章太长，只读了前面部分）" if len(text) > MAX_WEBREAD_CHARS else "")
+
+
 def _list_directory(path: str) -> str:
     d = _safe_path(path or str(ALLOWED_ROOT))
     if not d.is_dir():
@@ -207,6 +264,7 @@ def apply(ctx) -> None:
     handlers = {
         "get_current_time": lambda args: _get_current_time(),
         "web_search": lambda args: _web_search(args.get("query", ""), tavily_key),
+        "web_read": lambda args: _web_read(args.get("url", ""), tavily_key),
         "list_directory": lambda args: _list_directory(args.get("path", "")),
         "read_file": lambda args: _read_file(args.get("path", "")),
         "write_file": lambda args: _write_file(args.get("path", ""), args.get("content", "")),
