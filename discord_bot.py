@@ -42,6 +42,14 @@ async def _keepalive_typing(channel, stop: asyncio.Event) -> None:
             pass
 
 
+async def _set_recalling(on: bool) -> None:
+    """回忆期间把 bot 的自定义状态切成"正在回忆…"（成员列表/资料卡可见）。"""
+    try:
+        await client.change_presence(activity=discord.CustomActivity(name="正在回忆…") if on else None)
+    except Exception:
+        pass
+
+
 async def _send_text(channel, text: str) -> None:
     for i in range(0, len(text), 1990):
         await channel.send(text[i : i + 1990])
@@ -68,6 +76,8 @@ async def process_message(message: discord.Message, user_text: str,
             elif ev[0] == "voice":
                 voice_hint = ev[1]
                 whisper = bot.is_whisper(voice_hint)
+            elif ev[0] == "status":
+                await _set_recalling(bool(ev[1]))
             elif ev[0] == "sentence":
                 if whisper:
                     continue  # 悄悄话攒整段（分句合成气声会逐句漂移）
@@ -86,8 +96,10 @@ async def process_message(message: discord.Message, user_text: str,
         log.exception("llm failed")
         stop.set()
         keepalive.cancel()
+        await _set_recalling(False)
         await channel.send("嗚…人家剛剛恍神了啦，你再說一次好不好齁🥺")
         return
+    await _set_recalling(False)
     if not split and full_reply:
         tasks.append(asyncio.create_task(bot._safe_ogg(full_reply, bot.tts_params_for(emotion, voice_hint))))
     log.info("llm stream done in %.1fs, %d sentences, emotion=%s voice=%s split=%s", time.time() - t0, len(tasks), emotion, voice_hint or "-", split)

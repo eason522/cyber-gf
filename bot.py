@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import logging.handlers
 import os
 import re
 import subprocess
@@ -27,7 +28,21 @@ import memory as mem
 import ov_memory
 import gf_tools
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+# 日志：文件按天轮转保留 14 天（重启不丢），同时输出到 stdout（systemd journal 收）。
+# 注意 bot.py 会被执行两次（__main__ + discord_bot import bot），handler 只挂一次
+_fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+if not logging.root.handlers:
+    LOG_DIR = Path(__file__).parent / "logs"
+    LOG_DIR.mkdir(exist_ok=True)
+    _file_h = logging.handlers.TimedRotatingFileHandler(
+        LOG_DIR / "cyber-gf.log", when="midnight", backupCount=14, encoding="utf-8"
+    )
+    _file_h.setFormatter(_fmt)
+    _stream_h = logging.StreamHandler()
+    _stream_h.setFormatter(_fmt)
+    logging.root.setLevel(logging.INFO)
+    logging.root.addHandler(_file_h)
+    logging.root.addHandler(_stream_h)
 log = logging.getLogger("cyber-gf")
 
 BASE_DIR = Path(__file__).parent
@@ -256,6 +271,7 @@ async def _stream_once(msgs: list, effort: str, force_reply: bool, result: dict)
     slots: dict[int, dict] = {}  # 并行工具调用按 index 收集
     raw = ""  # reply 工具参数（引用 slots[0] 的累积值）
     plain = ""  # 模型没走工具调用时的兜底
+    thinking = ""  # 思考过程（走心档位开启 thinking 时模型输出）
     emitted = 0  # 已产出的句段数
     emotion_seen: str | None = None
     voice_seen: str | None = None
@@ -265,6 +281,7 @@ async def _stream_once(msgs: list, effort: str, force_reply: bool, result: dict)
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
+            thinking += getattr(delta, "reasoning_content", None) or ""
             tc = getattr(delta, "tool_calls", None)
             if tc:
                 for c in tc:
@@ -306,6 +323,8 @@ async def _stream_once(msgs: list, effort: str, force_reply: bool, result: dict)
             pass
 
     if diverted:
+        if thinking:
+            log.info("thinking(tool round): %s", thinking[:500])
         calls = []
         for i, s in sorted(slots.items()):
             try:
@@ -335,6 +354,8 @@ async def _stream_once(msgs: list, effort: str, force_reply: bool, result: dict)
         emitted += 1
     result["reply"] = reply
     result["emotion"] = emotion
+    if thinking:
+        log.info("thinking: %s", thinking[:1000])
 
 
 # 模型可调用工具时的系统提示补充
@@ -357,9 +378,11 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
     is_pre_recall = recall_task is not None
     if recall_task is None:
         recall_task = asyncio.create_task(ov_memory.recall(user_text))
+    yield ("status", "recall")  # 平台层可借此显示"正在回忆"
     effort, recalled = await asyncio.gather(judge_task, recall_task)
     if not recalled and is_pre_recall:
         recalled = await ov_memory.recall(user_text)  # 预检索为空，用真实文本补一次
+    yield ("status", "")
     if recalled:
         mem_block = "\n".join(f"- {m}" for m in recalled)
     elif store["memories"]:  # OpenViking 不可用时回退到本地记忆
@@ -400,9 +423,11 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
             msgs.append({"role": "tool", "tool_call_id": t["id"], "content": out})
     reply = result["reply"]
     emotion = result["emotion"]
+    log.info("reply (%s): %s", emotion, reply[:150])
 
-    store["history"].append({"role": "user", "content": user_text})
-    store["history"].append({"role": "assistant", "content": reply})
+    ts = time.time()
+    store["history"].append({"role": "user", "content": user_text, "ts": ts})
+    store["history"].append({"role": "assistant", "content": reply, "ts": ts})
     store["history"] = store["history"][-HISTORY_TURNS * 4 :]
     mem.save(user_id, store)
     asyncio.create_task(ov_memory.record_turn(user_id, user_text, reply))
@@ -560,6 +585,8 @@ async def process_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE, user_t
                         for s in pending:
                             tasks.append(asyncio.create_task(_safe_ogg(s, tts_params_for(emotion, voice_hint))))
                         pending.clear()
+            elif ev[0] == "status":
+                pass  # Telegram 没有可用的自定义状态，忽略
             else:
                 _, full_reply, emotion = ev
     except Exception:
@@ -690,7 +717,7 @@ async def heartbeat_loop(send) -> None:
             if not text:
                 continue  # NO_REPLY 或只写了小本本，不打扰他
             log.info("heartbeat: reaching out (%s): %s", emotion, text[:50])
-            store["history"].append({"role": "assistant", "content": text})
+            store["history"].append({"role": "assistant", "content": text, "ts": time.time()})
             mem.save(uid, store)
             ogg = None
             try:

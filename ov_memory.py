@@ -18,6 +18,8 @@ OV_API_KEY = os.getenv("OV_API_KEY", "")
 OV_PEER_ID = os.getenv("OV_PEER_ID", "boyfriend")
 COMMIT_EVERY = int(os.getenv("MEMORY_EVERY", "4"))
 RECALL_TOP_K = int(os.getenv("OV_RECALL_TOP_K", "5"))
+# 用户对回复速度不敏感，且 SF embedding 偶发慢到 15s+，多等一会儿换取记忆命中率
+RECALL_TIMEOUT = float(os.getenv("OV_RECALL_TIMEOUT", "30"))
 
 _client = None
 _health: tuple[bool, float] = (False, 0.0)
@@ -68,7 +70,7 @@ async def recall(query: str) -> list[str]:
 
         try:
             res = await asyncio.wait_for(
-                asyncio.to_thread(_find, f"viking://~/peers/{OV_PEER_ID}/memories/"), timeout=8
+                asyncio.to_thread(_find, f"viking://~/peers/{OV_PEER_ID}/memories/"), timeout=RECALL_TIMEOUT
             )
         except asyncio.TimeoutError:
             log.warning("ov recall peer find timeout, skip")
@@ -77,7 +79,7 @@ async def recall(query: str) -> list[str]:
         if len(items) < 2:
             try:
                 res2 = await asyncio.wait_for(
-                    asyncio.to_thread(_find, "viking://~/memories/"), timeout=8
+                    asyncio.to_thread(_find, "viking://~/memories/"), timeout=RECALL_TIMEOUT
                 )
                 if isinstance(res2, dict):
                     items += res2.get("memories", [])

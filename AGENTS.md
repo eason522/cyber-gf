@@ -21,8 +21,8 @@
 
 ```bash
 systemctl --user start|stop|restart cyber-gf    # 启停（pkill 会触发自动重启，别再用了）
-systemctl --user status cyber-gf                # 状态；日志仍写 bot.log
-journalctl --user -u cyber-gf -f                # 或用 journal 看日志
+systemctl --user status cyber-gf                # 状态
+tail -f logs/cyber-gf.log                       # 日志：按天轮转保留 14 天，重启不丢
 ```
 
 OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启），cyber-gf 配置了 `After=openviking.service` 保证启动顺序。运维命令详见 `~/openviking/INTEGRATION.md`。OpenViking 挂了不影响聊天，记忆自动降级。
@@ -32,7 +32,7 @@ OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启）
 ```
 消息(文字/语音) → bot.py
   ├─ asr_transcribe     语音入口三级降级：seedasr.auc 录音识别2.0(URL直传,方言/情绪标签) → 方舟 doubao-seed-2-0-mini 音频理解(本地文件base64) → 本地 whisper
-  ├─ ov_memory.recall   OpenViking 语义检索（peer 空间优先，8s 超时降级）
+  ├─ ov_memory.recall   OpenViking 语义检索（peer 空间优先，30s 超时降级；期间 Discord 状态显示"正在回忆…"）
   ├─ judge_depth        深度路由：闲聊 minimal(关思考) / 走心 high(开思考)
   ├─ chat_stream        seed-character 流式 + 工具调用循环（gf_tools：时间/Tavily搜索/文件读写 → reply 收尾，emotion 先行）
   └─ seed-tts-2.0       ≤350字(或悄悄话)整段一次合成，超长才按句并行；情绪→语气指令，语音先发文字后到
