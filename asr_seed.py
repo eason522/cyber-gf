@@ -64,7 +64,7 @@ def _extract_hints(result: dict, top: dict) -> list[str]:
 
 
 async def transcribe_url(url: str, fmt: str = "ogg", codec: str = "",
-                         timeout: float = 20.0) -> tuple[str, list[str]]:
+                         timeout: float = 30.0) -> tuple[str, list[str]]:
     """识别音频 URL，返回 (文本, 提示列表)。识别失败抛异常，由调用方降级。"""
     key = os.environ["DOUBAO_API_KEY"]
     task_id = uuid.uuid4().hex
