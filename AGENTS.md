@@ -34,7 +34,7 @@ OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启）
   ├─ asr_transcribe     语音入口三级降级：seedasr.auc 录音识别2.0(URL直传,方言/情绪标签) → 方舟 doubao-seed-2-0-mini 音频理解(本地文件base64) → 本地 whisper
   ├─ ov_memory.recall   OpenViking 语义检索（peer 空间优先，8s 超时降级）
   ├─ judge_depth        深度路由：闲聊 minimal(关思考) / 走心 high(开思考)
-  ├─ chat_stream        seed-character 流式 + reply 工具调用（emotion 先行）
+  ├─ chat_stream        seed-character 流式 + 工具调用循环（gf_tools：时间/Tavily搜索/文件读写 → reply 收尾，emotion 先行）
   └─ seed-tts-2.0       ≤350字(或悄悄话)整段一次合成，超长才按句并行；情绪→语气指令，语音先发文字后到
 每 8 轮对话 commit 到 OpenViking 自动提炼长期记忆；心跳每 45 分钟主动关心（NO_REPLY 契约）
 ```
@@ -46,7 +46,8 @@ OpenViking 同样纳入了 `openviking.service`（开机自启 + 自动重启）
 | `soul/IDENTITY.md` | 她是谁：名字、存在形式、vibe、生日 |
 | `soul/SOUL.md` | 性格、说话风格、小世界、边界。改人设只动这里，每条消息实时加载，改完不用重启 |
 | `soul/USER.md` | 用户画像（指令式条目，带 observed/status 元数据） |
-| `bot.py` | 核心流水线 + Telegram 接入：平台分发（main→run_telegram/discord_bot.run）、深度路由、流式编排、TTS 参数映射（EMOTIONS 表）、心跳（heartbeat_loop 接收平台 send 回调） |
+| `bot.py` | 核心流水线 + Telegram 接入：平台分发（main→run_telegram/discord_bot.run）、深度路由、工具调用循环（_stream_once 单轮流式 + chat_stream 外层最多4轮工具循环，末轮强制 reply）、TTS 参数映射（EMOTIONS 表）、心跳（heartbeat_loop 接收平台 send 回调） |
+| `gf_tools.py` | 暖暖的工具箱：get_current_time（北京时间）/ web_search（Tavily，`TAVILY_API_KEY`）/ list_directory / read_file / write_file。文件操作限制在 /home/eason 下，拒绝 config.env/.ssh/.git 等敏感路径；工具出错只返回错误字符串 |
 | `discord_bot.py` | Discord 接入层：私信或 @机器人 触发，复用 bot.py 的 chat_stream/TTS/心跳；语音以 ogg 音频附件发送（Discord 机器人不能发原生语音条），收语音靠音频附件 |
 | `ov_memory.py` | OpenViking 封装：recall / record_turn(commit) / healthy |
 | `memory.py` | 本地兜底记忆（OV 不可用时）+ 历史持久化（`data/<uid>.json`） |

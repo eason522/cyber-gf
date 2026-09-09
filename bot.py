@@ -23,6 +23,7 @@ from telegram.ext import (
 import soul
 import memory as mem
 import ov_memory
+import gf_tools
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("cyber-gf")
@@ -228,42 +229,18 @@ def _extract_stream_text(raw: str) -> str:
     return _json_unescape(s)
 
 
-async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | None = None):
-    """流式回复生成器：依次产出 ("emotion", e) / ("sentence", s)，最后 ("done", reply, emotion)。
+async def _stream_once(msgs: list, effort: str, force_reply: bool, result: dict):
+    """单轮流式生成。产出 ("emotion", e) / ("voice", v) / ("sentence", s) 事件。
 
-    recall_task：语音场景下与 ASR 并行的预检索任务。
+    模型调用行动工具（非 reply）时：不产出任何事件，把工具调用放进
+    result["tool_calls"] 由外层执行后重开一轮；正常回复时把最终结果放进
+    result["reply"] / result["emotion"]。
     """
-    store = get_store(user_id)
-    judge_task = asyncio.create_task(judge_depth(user_text))
-    is_pre_recall = recall_task is not None
-    if recall_task is None:
-        recall_task = asyncio.create_task(ov_memory.recall(user_text))
-    effort, recalled = await asyncio.gather(judge_task, recall_task)
-    if not recalled and is_pre_recall:
-        recalled = await ov_memory.recall(user_text)  # 预检索为空，用真实文本补一次
-    if recalled:
-        mem_block = "\n".join(f"- {m}" for m in recalled)
-    elif store["memories"]:  # OpenViking 不可用时回退到本地记忆
-        mem_block = "\n".join(f"- {m}" for m in store["memories"])
-    else:
-        mem_block = ""
-    system = soul.build_system(mem_block)
-    if effort == "high":
-        system += (
-            "\n\n（走心時刻：他這句話觸動了你心底最軟的地方。現在拋開平常發短訊息的習慣，"
-            "像寫一封短信、一段獨白那樣，把你的心意完整說出來——認真地說 5~8 句、至少 100 字，"
-            "回憶你們之間的細節，說你平時不好意思說的話。慢慢說，他會聽完的。"
-            "感覺大概是這樣的節奏（只是示範語氣和長度，絕對不要照抄內容，說你自己心裡的話）：「寶貝，你知道嗎……其實我有好多話一直想跟你說……（以下省略）」）"
-        )
-    log.info("depth=%s", effort)
-    msgs = [{"role": "system", "content": system}]
-    msgs.extend(store["history"][-HISTORY_TURNS * 2 :])
-    msgs.append({"role": "user", "content": user_text})
     stream = await llm.chat.completions.create(
         model=LLM_MODEL,
         messages=msgs,
-        tools=REPLY_TOOL,
-        tool_choice={"type": "function", "function": {"name": "reply"}},
+        tools=gf_tools.TOOL_DEFS + REPLY_TOOL,
+        tool_choice={"type": "function", "function": {"name": "reply"}} if force_reply else "auto",
         stream=True,
         extra_body=(
             {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
@@ -271,11 +248,13 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
             else {"thinking": {"type": "disabled"}}
         ),
     )
-    raw = ""  # 工具调用参数（累积的 JSON 字符串）
+    slots: dict[int, dict] = {}  # 并行工具调用按 index 收集
+    raw = ""  # reply 工具参数（引用 slots[0] 的累积值）
     plain = ""  # 模型没走工具调用时的兜底
     emitted = 0  # 已产出的句段数
     emotion_seen: str | None = None
     voice_seen: str | None = None
+    diverted = False  # 首个工具不是 reply → 本轮只为取工具结果，不产生事件
     try:
         async for chunk in stream:
             if not chunk.choices:
@@ -283,9 +262,22 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
             delta = chunk.choices[0].delta
             tc = getattr(delta, "tool_calls", None)
             if tc:
-                raw += tc[0].function.arguments or ""
+                for c in tc:
+                    slot = slots.setdefault(c.index or 0, {"id": "", "name": "", "args": ""})
+                    if c.id:
+                        slot["id"] = c.id
+                    if getattr(c.function, "name", None):
+                        slot["name"] = c.function.name
+                    slot["args"] += c.function.arguments or ""
+                name0 = slots.get(0, {}).get("name", "")
+                if name0 and name0 != "reply" and not plain:
+                    diverted = True
+                elif name0 == "reply":
+                    raw = slots[0]["args"]
             elif delta.content:
                 plain += delta.content
+            if diverted:
+                continue
             if raw and emotion_seen is None:
                 em = EMOTION_RE.search(raw)
                 if em:
@@ -308,6 +300,17 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
         except Exception:
             pass
 
+    if diverted:
+        calls = []
+        for i, s in sorted(slots.items()):
+            try:
+                args = json.loads(s["args"]) if s["args"].strip() else {}
+            except json.JSONDecodeError:
+                args = {}
+            calls.append({"id": s["id"] or f"call_{i}", "name": s["name"], "args": args})
+        result["tool_calls"] = calls
+        return
+
     if raw:
         args = json.loads(raw)
         reply = (args.get("text") or "").strip()
@@ -325,6 +328,73 @@ async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | 
     while emitted < len(rest):
         yield ("sentence", rest[emitted])
         emitted += 1
+    result["reply"] = reply
+    result["emotion"] = emotion
+
+
+# 模型可调用工具时的系统提示补充
+CAPABILITY_NOTE = (
+    "\n\n（你有工具可以用：get_current_time 查真实时间（他问时间必须调用，不许自己猜）、"
+    "web_search 联网搜索、list_directory / read_file / write_file 浏览和读写服务器上的文件。"
+    "需要时先调工具，拿到结果后再调 reply 回复他；工具结果用你自己的话说，别照念。用不上工具就直接 reply。）"
+)
+MAX_TOOL_ROUNDS = 4
+
+
+async def chat_stream(user_id: int, user_text: str, recall_task: asyncio.Task | None = None):
+    """流式回复生成器：依次产出 ("emotion", e) / ("sentence", s)，最后 ("done", reply, emotion)。
+
+    支持工具调用循环：模型调行动工具 → 执行 → 结果回填 → 重新生成，直到给出 reply。
+    recall_task：语音场景下与 ASR 并行的预检索任务。
+    """
+    store = get_store(user_id)
+    judge_task = asyncio.create_task(judge_depth(user_text))
+    is_pre_recall = recall_task is not None
+    if recall_task is None:
+        recall_task = asyncio.create_task(ov_memory.recall(user_text))
+    effort, recalled = await asyncio.gather(judge_task, recall_task)
+    if not recalled and is_pre_recall:
+        recalled = await ov_memory.recall(user_text)  # 预检索为空，用真实文本补一次
+    if recalled:
+        mem_block = "\n".join(f"- {m}" for m in recalled)
+    elif store["memories"]:  # OpenViking 不可用时回退到本地记忆
+        mem_block = "\n".join(f"- {m}" for m in store["memories"])
+    else:
+        mem_block = ""
+    system = soul.build_system(mem_block) + CAPABILITY_NOTE
+    if effort == "high":
+        system += (
+            "\n\n（走心時刻：他這句話觸動了你心底最軟的地方。現在拋開平常發短訊息的習慣，"
+            "像寫一封短信、一段獨白那樣，把你的心意完整說出來——認真地說 5~8 句、至少 100 字，"
+            "回憶你們之間的細節，說你平時不好意思說的話。慢慢說，他會聽完的。"
+            "感覺大概是這樣的節奏（只是示範語氣和長度，絕對不要照抄內容，說你自己心裡的話）：「寶貝，你知道嗎……其實我有好多話一直想跟你說……（以下省略）」）"
+        )
+    log.info("depth=%s", effort)
+    msgs = [{"role": "system", "content": system}]
+    msgs.extend(store["history"][-HISTORY_TURNS * 2 :])
+    msgs.append({"role": "user", "content": user_text})
+
+    result: dict = {}
+    for round_no in range(MAX_TOOL_ROUNDS + 1):
+        result = {}
+        async for ev in _stream_once(msgs, effort, round_no == MAX_TOOL_ROUNDS, result):
+            yield ev
+        tool_calls = result.get("tool_calls")
+        if not tool_calls:
+            break
+        log.info("tool round %d: %s", round_no, [(t["name"], t["args"]) for t in tool_calls])
+        msgs.append({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": t["id"], "type": "function",
+                "function": {"name": t["name"], "arguments": json.dumps(t["args"], ensure_ascii=False)},
+            } for t in tool_calls],
+        })
+        for t in tool_calls:
+            out = "（先别急着回复，把工具结果用上再说）" if t["name"] == "reply" else await gf_tools.run(t["name"], t["args"])
+            msgs.append({"role": "tool", "tool_call_id": t["id"], "content": out})
+    reply = result["reply"]
+    emotion = result["emotion"]
 
     store["history"].append({"role": "user", "content": user_text})
     store["history"].append({"role": "assistant", "content": reply})
