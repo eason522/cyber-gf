@@ -57,7 +57,8 @@ REPLY_TOOL = [{
 CAPABILITY_NOTE = (
     "\n\n（你有工具可以用：get_current_time 查真实时间（他问时间必须调用，不许自己猜）、"
     "web_search 联网搜索、list_directory / read_file / write_file 浏览和读写服务器上的文件、"
-    "schedule_task 安排定时任务（他让你某个时间提醒他/做某事时用，搭配 get_current_time 确认时间）。"
+    "schedule_task 安排定时任务。**凡是带时间的承诺（「X分钟后/明天X点/每天X点 提醒你/叫你/做某事」），"
+    "必须调用 schedule_task 才算数——光口头答应不会真的执行**，任务只会躺在你嘴里。"
     "需要时先调工具，拿到结果后再调 reply 回复他；工具结果用你自己的话说，别照念。用不上工具就直接 reply。）"
 )
 MAX_TOOL_ROUNDS = 4
