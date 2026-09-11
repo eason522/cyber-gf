@@ -22,7 +22,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # 默认插件树（按依赖序），平台插件按 BOT_PLATFORM 追加在末尾
 DEFAULT_PLUGINS = [
     "llm", "persona", "sessions", "memory_local", "memory_openviking",
-    "asr", "tts", "tools_builtin", "depth_router", "interests", "memory_md", "chat",
+    "asr", "tts", "tools_builtin", "depth_router", "interests", "memory_md", "scheduler", "chat",
     "heartbeat", "surf",
 ]
 PLATFORM_PLUGINS = {"telegram": "platform_telegram", "discord": "platform_discord"}

@@ -56,7 +56,8 @@ REPLY_TOOL = [{
 # 模型可调用工具时的系统提示补充
 CAPABILITY_NOTE = (
     "\n\n（你有工具可以用：get_current_time 查真实时间（他问时间必须调用，不许自己猜）、"
-    "web_search 联网搜索、list_directory / read_file / write_file 浏览和读写服务器上的文件。"
+    "web_search 联网搜索、list_directory / read_file / write_file 浏览和读写服务器上的文件、"
+    "schedule_task 安排定时任务（他让你某个时间提醒他/做某事时用，搭配 get_current_time 确认时间）。"
     "需要时先调工具，拿到结果后再调 reply 回复他；工具结果用你自己的话说，别照念。用不上工具就直接 reply。）"
 )
 MAX_TOOL_ROUNDS = 4
@@ -302,7 +303,7 @@ class ChatService:
                 } for t in tool_calls],
             })
             for t in tool_calls:
-                out = "（先别急着回复，把工具结果用上再说）" if t["name"] == "reply" else await self._tools.run(t["name"], t["args"])
+                out = "（先别急着回复，把工具结果用上再说）" if t["name"] == "reply" else await self._tools.run(t["name"], t["args"], {"user_id": user_id})
                 msgs.append({"role": "tool", "tool_call_id": t["id"], "content": out})
             yield ("status", "")
         reply = result["reply"]

@@ -231,7 +231,8 @@ class ToolRegistry:
         self._handlers: dict[str, object] = {}
 
     def register(self, schema: dict, handler) -> None:
-        """注册工具。handler 签名 (args: dict) -> str，sync/async 均可；同名覆盖。"""
+        """注册工具。handler 签名 (args: dict, meta: dict | None) -> str，sync/async 均可，
+        同名覆盖。meta 由调用方传入（如 {"user_id": ...}），不需要的工具忽略即可。"""
         name = schema["function"]["name"]
         if name in self._handlers:
             self._schemas = [s for s in self._schemas if s["function"]["name"] != name]
@@ -242,12 +243,12 @@ class ToolRegistry:
         """OpenAI tools schema 列表，直接拼进 chat.completions.create 的 tools 参数。"""
         return list(self._schemas)
 
-    async def run(self, name: str, args: dict) -> str:
+    async def run(self, name: str, args: dict, meta: dict | None = None) -> str:
         handler = self._handlers.get(name)
         if handler is None:
             return f"没有 {name} 这个工具"
         try:
-            r = handler(args or {})
+            r = handler(args or {}, meta or {})
             if inspect.isawaitable(r):
                 r = await r
             return r
@@ -262,12 +263,12 @@ def apply(ctx) -> None:
     tavily_key = cfg.tavily_api_key
     # 内置工具 handler：签名统一为 (args) -> str
     handlers = {
-        "get_current_time": lambda args: _get_current_time(),
-        "web_search": lambda args: _web_search(args.get("query", ""), tavily_key),
-        "web_read": lambda args: _web_read(args.get("url", ""), tavily_key),
-        "list_directory": lambda args: _list_directory(args.get("path", "")),
-        "read_file": lambda args: _read_file(args.get("path", "")),
-        "write_file": lambda args: _write_file(args.get("path", ""), args.get("content", "")),
+        "get_current_time": lambda args, meta=None: _get_current_time(),
+        "web_search": lambda args, meta=None: _web_search(args.get("query", ""), tavily_key),
+        "web_read": lambda args, meta=None: _web_read(args.get("url", ""), tavily_key),
+        "list_directory": lambda args, meta=None: _list_directory(args.get("path", "")),
+        "read_file": lambda args, meta=None: _read_file(args.get("path", "")),
+        "write_file": lambda args, meta=None: _write_file(args.get("path", ""), args.get("content", "")),
     }
     registry = ToolRegistry()
     for schema in TOOL_DEFS:

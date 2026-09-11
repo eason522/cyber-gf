@@ -88,6 +88,7 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
 | `plugins/sessions.py` | 服务 sessions：会话内存态、`data/<uid>.json` 持久化（委托 memory.py）、contact.json 读写 |
 | `plugins/memory_local.py` | 服务 memory（本地兜底提供者）：定期 LLM 提炼 |
 | `plugins/memory_md.py` | 服务 memory_md：随身记忆（soul/MEMORY.md）实时维护。note() 每轮进缓冲 + 重置计时器（UPDATE_DELAY=120s debounce，一波对话只更新一次），失败留旧文件、缓冲保留下次再试，on_dispose 退出前强制落盘；get() 供 chat 注入 system |
+| `plugins/scheduler.py` | 服务 scheduler：计划任务/提醒。注册 schedule_task/list_scheduled/cancel_scheduled 三个工具（meta 带 user_id/chat_id），任务持久化 data/schedule.json，20s 轮询到期执行；执行走心跳同款链路（persona+随身记忆 → 强制 reply → TTS → platform.send），支持一次性（at）/每天（daily）/多少分钟后（in_minutes） |
 | `plugins/memory_openviking.py` | 服务 memory（OpenViking 提供者，override 本地）：recall/record_turn，OV 挂自动降级 |
 | `plugins/asr.py` | 服务 asr：语音转文字三级降级链（委托 asr_seed.py，whisper 惰性单例兜底） |
 | `plugins/tts.py` | 服务 tts：seed-tts-2.0 → edge-tts 降级（委托 tts_seed.py）、EMOTIONS/音色映射、safe_ogg |
