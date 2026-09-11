@@ -273,6 +273,12 @@ class ChatService:
         notes = self._persona.tinynote_block()
         if notes:
             system += "\n\n# 她的小本本近况（她自己写的日记/冲浪笔记，聊天时可以自然地分享里面的新发现）\n\n" + notes
+        if self._ctx.has("dopamine"):
+            system += "\n\n" + self._ctx.inject("dopamine").prompt_block()
+        if self._ctx.has("social"):
+            social_block = self._ctx.inject("social").recent_block()
+            if social_block:
+                system += "\n\n" + social_block
         if effort == "high":
             system += (
                 "\n\n（走心時刻：他這句話觸動了你心底最軟的地方。現在拋開平常發短訊息的習慣，"
@@ -414,7 +420,7 @@ class ChatService:
             await ui.send_voice(ogg)
             ogg.unlink(missing_ok=True)
         await ui.send_text(full_reply)  # 文字最后到
-        await self._ctx.emit("reply.done", user_id=user_id)
+        await self._ctx.emit("reply.done", user_id=user_id, emotion=emotion)
 
 
 def apply(ctx) -> None:

@@ -26,8 +26,14 @@ class Config:
     history_turns: int         # HISTORY_TURNS
     memory_every: int          # MEMORY_EVERY（本地提炼与 OV commit 共用）
     # 心跳（bot.py）
-    heartbeat_minutes: int     # HEARTBEAT_MINUTES
+    heartbeat_minutes: int     # HEARTBEAT_MINUTES（间隔中枢，实际每次 ±jitter 随机）
     heartbeat_silence_h: float # HEARTBEAT_SILENCE_H
+    heartbeat_jitter: float    # HEARTBEAT_JITTER（间隔随机抖动幅度，0.6 = 中枢的 40%~160%）
+    home_location: str         # HOME_LOCATION（他所在的地方，心跳嘘寒问暖查天气用）
+    # 多巴胺系统（plugins/dopamine.py）
+    dopamine_tick_minutes: int # DOPAMINE_TICK_MINUTES（衰减/昼夜节律 tick 周期）
+    # 闺蜜与宠物（plugins/social.py）
+    social_minutes: int        # SOCIAL_MINUTES（小剧场间隔中枢，实际 60%~150% 随机）
     # 深度路由裁判（bot.py judge_depth）
     judge_api_key: str         # JUDGE_API_KEY（空则一律 minimal）
     judge_model: str           # JUDGE_MODEL
@@ -71,6 +77,10 @@ class Config:
             memory_every=int(env.get("MEMORY_EVERY", "4")),
             heartbeat_minutes=int(env.get("HEARTBEAT_MINUTES", "45")),
             heartbeat_silence_h=float(env.get("HEARTBEAT_SILENCE_H", "2")),
+            heartbeat_jitter=float(env.get("HEARTBEAT_JITTER", "0.6")),
+            home_location=env.get("HOME_LOCATION", "四川省彭州市九尺镇"),
+            dopamine_tick_minutes=int(env.get("DOPAMINE_TICK_MINUTES", "10")),
+            social_minutes=int(env.get("SOCIAL_MINUTES", "240")),
             judge_api_key=env.get("JUDGE_API_KEY", ""),
             judge_model=env.get("JUDGE_MODEL", "Qwen/Qwen3-8B"),
             doubao_api_key=env.get("DOUBAO_API_KEY", ""),
