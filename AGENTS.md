@@ -92,6 +92,7 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
 | `plugins/sessions.py` | 服务 sessions：会话内存态、`data/<uid>.json` 持久化（委托 memory.py）、contact.json 读写 |
 | `plugins/memory_local.py` | 服务 memory（本地兜底提供者）：定期 LLM 提炼 |
 | `plugins/memory_md.py` | 服务 memory_md：随身记忆（soul/MEMORY.md）实时维护。note() 每轮进缓冲 + 重置计时器（UPDATE_DELAY=120s debounce，一波对话只更新一次），失败留旧文件、缓冲保留下次再试，on_dispose 退出前强制落盘；get() 供 chat 注入 system |
+| `plugins/empathy.py` | 服务 empathy：「读懂他」观察笔记（soul/UNDERSTANDING.md，已 gitignore）。订阅 turn.done，对话停 180s 后批量喂主模型增量更新。防过拟合：每条带【猜测】/【观察中】/【确信】确信度，新观察从猜测起步、印证才升级、未印证淘汰、他纠正立刻改写；记信号不贴标签。get() 供 chat 注入 system（带"别念出来别套用"分寸） |
 | `plugins/scheduler.py` | 服务 scheduler：计划任务/提醒。注册 schedule_task/list_scheduled/cancel_scheduled 三个工具（meta 带 user_id/chat_id），任务持久化 data/schedule.json，20s 轮询到期执行；执行走心跳同款链路（persona+随身记忆 → 强制 reply → TTS → platform.send），支持一次性（at）/每天（daily）/多少分钟后（in_minutes） |
 | `plugins/dopamine.py` | 服务 dopamine：赛博多巴胺系统。模拟人体机制——昼夜节律紧张性基线 + 剥夺效应（他太久没来基线下压）、RPE 相位脉冲（他的消息是奖赏，久别惊喜冲高、连珠炮习惯化打折、聊天情绪余韵微调）、40 分钟半衰期指数衰减。监听 message.received / reply.done（带 emotion），social 插件可 stimulate()。mood() 输出喜怒哀乐档位，prompt_block() 注入聊天/心跳 system 当心情底色。状态 data/dopamine.json |
 | `plugins/social.py` | 服务 social：闺蜜+宠物系统。闺蜜「林小夏」（人设 soul/BESTIE.md、记忆 data/bestie_memory.md 每集后由主模型维护、亲密度/冷战状态 data/social.json）+ 布偶猫「麻糬」（饥饿/精力随时间模拟）。SOCIAL_MINUTES 中枢 60%~150% 随机间隔驱动一集"小剧场"（串门/逛街/遛猫/聊天/分享秘密/偶尔小矛盾冷战再和好，冷战最多僵持 2 集强制转机），模型用主模型 doubao-seed-character；日记写进 tinynote/ 自动进聊天上下文，mood_delta 刺激多巴胺；recent_block() 注入聊天/心跳 system |
@@ -99,9 +100,9 @@ surf 插件：每 3 小时（SURF_MINUTES）她自己上网刷八卦/新闻，�
 | `plugins/asr.py` | 服务 asr：语音转文字三级降级链（委托 asr_seed.py，whisper 惰性单例兜底） |
 | `plugins/tts.py` | 服务 tts：seed-tts-2.0 → edge-tts 降级（委托 tts_seed.py）、EMOTIONS/音色映射、safe_ogg |
 | `plugins/tools_builtin.py` | 服务 tools：工具注册表 ToolRegistry（defs/register/run），内置 6 个工具：时间 / web_search / web_read（点进链接细读正文，Tavily extract 主、直连剥 HTML 兜底）/ list_directory / read_file / write_file。文件操作限制在 /home/eason 下，拒绝 config.env/.ssh/.git 等敏感路径；工具出错只返回错误字符串 |
-| `plugins/depth_router.py` | 服务 depth：judge_depth（硅基流动 Qwen3-8B 关思考 + DEEP_KEYWORDS 快捷路径） |
+| `plugins/depth_router.py` | 服务 depth：judge 返回 (思考档位, 他此刻的情绪)——硅基流动 Qwen3-8B 关思考双行输出（深度+情绪词），短消息走 DEEP_KEYWORDS 快捷路径 + MOOD_KEYWORDS 本地情绪嗅探 |
 | `plugins/interests.py` | 服务 interests：兴趣手账（`soul/interests.md`，已 gitignore——系统反复重写不进仓库），定期（INTERESTS_HOURS，默认 6h）用主模型综合长期记忆+小本本+近期对话重写；固定四分区（长期热爱/最近上头/冷却中/想探索的新领域）+ 小步更新规则防兴趣过拟合 |
-| `plugins/chat.py` | 服务 chat：核心流水线。stream() 事件流 + REPLY_TOOL schema + 工具调用循环（最多4轮、末轮强制 reply）；process() 统一 TG/Discord 的消息派发（攒句/整段≤350字/超长分句并行/语音先发文字后到） |
+| `plugins/chat.py` | 服务 chat：核心流水线。stream() 事件流 + REPLY_TOOL schema + 工具调用循环（最多4轮、末轮强制 reply）；system 注入 memory_md/empathy(读懂他)/interests/小本本/多巴胺心情/social 近况/他此刻的情绪直觉；process() 统一 TG/Discord 的消息派发（攒句/整段≤350字/超长分句并行/语音先发文字后到）；完成后 emit turn.done（empathy 订阅） |
 | `plugins/heartbeat.py` | 后台任务：随机间隔心跳（HEARTBEAT_MINUTES 中枢 ±HEARTBEAT_JITTER 抖动，NO_REPLY 契约、北京时间沉默判定）；system 注入 OV/本地记忆 + 随身记忆 + 兴趣手账 + 小本本近况 + social 生活近况 + 多巴胺心情底色综合判断发不发/发什么；工具含 web_search/web_read（可查 HOME_LOCATION 天气嘘寒问暖），platform 服务延迟 inject |
 | `plugins/surf.py` | 后台任务：3 小时冲浪循环，写 tinynote |
 | `plugins/platform_telegram.py` | 服务 platform（TG）：ptb 手动生命周期（initialize/start/updater.start_polling，"ready" 事件触发启动）；文字/语音入口；TelegramUI（pulse→RECORD_VOICE，status no-op） |

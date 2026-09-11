@@ -23,7 +23,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_PLUGINS = [
     "llm", "persona", "sessions", "memory_local", "memory_openviking",
     "asr", "tts", "tools_builtin", "depth_router", "interests", "memory_md", "scheduler",
-    "dopamine", "social", "chat",
+    "dopamine", "social", "empathy", "chat",
     "heartbeat", "surf",
 ]
 PLATFORM_PLUGINS = {"telegram": "platform_telegram", "discord": "platform_discord"}

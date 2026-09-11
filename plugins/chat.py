@@ -251,7 +251,7 @@ class ChatService:
         if recall_task is None:
             recall_task = asyncio.create_task(self._memory.recall(user_text))
         yield ("status", "recall")  # 平台层可借此显示"正在回忆"
-        effort, recalled = await asyncio.gather(judge_task, recall_task)
+        (effort, his_mood), recalled = await asyncio.gather(judge_task, recall_task)
         if not recalled and is_pre_recall:
             recalled = await self._memory.recall(user_text)  # 预检索为空，用真实文本补一次
         yield ("status", "")
@@ -266,6 +266,14 @@ class ChatService:
             memory_md = self._ctx.inject("memory_md").get()
             if memory_md:
                 system += "\n\n# 她的随身记忆（最高频、最重要的记忆，优先相信这里）\n\n" + memory_md
+        if self._ctx.has("empathy"):
+            understanding = self._ctx.inject("empathy").get()
+            if understanding:
+                system += (
+                    "\n\n# 她对他的了解（长期相处中悄悄积累的直觉）\n\n" + understanding
+                    + "\n\n（以上是她的直觉，未必都对——不要念出来、不要逐条套用、"
+                    "不要刻意展示「我懂你」，只在合适的时机让它自然流露；他否认的，以他说的为准。）"
+                )
         if self._ctx.has("interests"):
             interests = self._ctx.inject("interests").get()
             if interests:
@@ -287,6 +295,11 @@ class ChatService:
                 "感覺大概是這樣的節奏（只是示範語氣和長度，絕對不要照抄內容，說你自己心裡的話）：「寶貝，你知道嗎……其實我有好多話一直想跟你說……（以下省略）」）"
             )
         log.info("depth=%s", effort)
+        if his_mood:
+            system += (
+                f"\n\n（直觉：他说这句话时的情绪偏向「{his_mood}」——不一定准，别点破、"
+                "别追问「你是不是XX了」，自然地照顾到他的情绪就好。）"
+            )
         msgs = [{"role": "system", "content": system}]
         msgs.extend(sessions.recent(user_id))
         msgs.append({"role": "user", "content": user_text})
@@ -318,6 +331,7 @@ class ChatService:
         log.info("reply (%s): %s", emotion, reply[:150])
 
         sessions.append_turn(user_id, user_text, reply, time.time())
+        self._ctx.create_task(self._ctx.emit("turn.done", user_id=user_id, user_text=user_text, reply=reply))
         self._ctx.create_task(self._memory.record_turn(user_id, user_text, reply))
         if self._ctx.has("memory_md"):
             self._ctx.create_task(self._ctx.inject("memory_md").note(user_id, user_text, reply))
