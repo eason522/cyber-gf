@@ -1,6 +1,7 @@
 .venv/
 data/
 *.log
+logs/
 __pycache__/
 ffmpeg
 config.env
