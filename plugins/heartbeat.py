@@ -108,7 +108,7 @@ class HeartbeatService:
                 uid = contact["user_id"]
                 recalled = await self._ctx.inject("memory").recall("最近关心他、问候他、约定、他的近况、身体、心情")
                 system = self._build_system(uid, recalled)
-                now = now_dt.strftime("%H:%M")
+                now = now_dt.strftime("%Y年%m月%d日 星期{} %H:%M".format("一二三四五六日"[now_dt.weekday()]))
                 msgs = [
                     {"role": "system", "content": system},
                     *sessions.recent(uid),
@@ -123,7 +123,8 @@ class HeartbeatService:
                         "查到了不满意可以 web_read 细看）。"
                         "如果想主动关心他，就调用 reply 工具发一条消息；"
                         "如果不想打扰他、但心里有话想说，可以写进你的小本本"
-                        "（用 write_file 写到 ~/cyber-gf/tinynote/，比如日记、随笔，写之前可以先用 list_directory 看看以前写过什么）；"
+                        "（用 write_file 写到 ~/cyber-gf/tinynote/，比如日记、随笔，写之前可以先用 list_directory 看看以前写过什么；"
+                        "写日记时文件名和正文里的日期必须用上面的真实日期，拿不准就先调 get_current_time，不许自己编日期）；"
                         "如果什么都不想做（比如刚聊过不久、没有理由打扰），就只回复 NO_REPLY，什么也别发。）"
                     )},
                 ]

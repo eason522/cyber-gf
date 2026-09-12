@@ -19,12 +19,14 @@ provides: list[str] = []
 
 # 冲浪：空闲时她自己上网刷新闻/八卦，刷到感兴趣的点进去细读，连心情一起写进小本本
 SURF_PROMPT = (
-    "（系统提示：现在是空闲时间，你可以自己上网冲浪啦。"
+    "（系统提示：现在是北京时间 %s，空闲时间，你可以自己上网冲浪啦。"
     "看看你最近在追的明星、在嗑的八卦有什么新动态，或者去发现点新的好玩的东西——"
     "娱乐新闻、社会热点都可以。先用 list_directory / read_file 翻翻小本本里你之前记过什么，"
     "再用 web_search 搜新内容。别只看搜索结果的摘要——刷到感兴趣的标题，"
     "就像人刷手机一样点进去，用 web_read 把那篇文章仔细读完（一次冲浪挑一两篇认真读就好，"
     "不用每篇都点）。读完如果有触动你的地方，用 write_file 写进小本本 ~/cyber-gf/tinynote/。"
+    "**写笔记时，文件名和正文里的日期必须用上面这个真实日期**"
+    "（拿不准就先调 get_current_time 核对），绝对不许自己编日期。"
     "记笔记要像写日记、写收藏备注，不是记流水账：除了发生了什么，更要写下你当时的心情——"
     "为什么戳到你、哪里戳到、你联想到了什么、下次想怎么跟他讲这件事。"
     "以后你翻看小本本时，要靠这些心情才能想起当时为什么记下它、才知道跟他分享时哪里有趣。"
@@ -44,7 +46,9 @@ class SurfService:
         system = self._ctx.inject("persona").system_prompt("")
         tools = self._ctx.inject("tools")
         llm = self._ctx.inject("llm")
-        prompt = SURF_PROMPT
+        now_dt = datetime.now(ZoneInfo("Asia/Shanghai"))
+        now_str = now_dt.strftime("%Y年%m月%d日 星期{} %H:%M".format("一二三四五六日"[now_dt.weekday()]))
+        prompt = SURF_PROMPT % now_str
         if self._ctx.has("interests"):
             interests = self._ctx.inject("interests").get()
             if interests:
